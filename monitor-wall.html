@@ -72,6 +72,9 @@
   details.dev > summary::-webkit-details-marker { display: none; }
   .caret::before { content: "▸"; font-size: 9px; color: #6e7681; }
   details.dev[open] > summary .caret::before { content: "▾"; color: #58a6ff; }
+  /* 收起来的这台：整行压暗，屏幕上看不见它，但清单里还在（按钮和输入框照常可用） */
+  details.dev.hid > summary { opacity: .55; }
+  details.dev.hid > summary .sumName { text-decoration: line-through; }
   .sumName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chip { font-size: 10px; color: #6e7681; border: 1px solid #21262d; border-radius: 4px; padding: 0 5px;
     white-space: nowrap; }
@@ -85,12 +88,18 @@
   .ztabs button { padding: 3px 9px; font-size: 11.5px; border-radius: 999px; }
   .ztabs button.on { color: #e6edf3; border-color: #58a6ff; background: #132a44; }
   .ztabs .zn { margin-left: 5px; opacity: .7; font-variant-numeric: tabular-nums; }
+  /* 关掉的分区在选项卡上也要看得出来：整个区不摆，台数按 0 显示，名字划掉 */
+  .ztabs button.zoff { opacity: .5; }
+  .ztabs button.zoff span:first-child { text-decoration: line-through; }
 
-  /* 分区设置：一行 = 名字 / X / Z / ◎定位 / 删除 */
-  .zrow { display: grid; grid-template-columns: 1fr 82px 82px auto auto; gap: 6px; align-items: center;
+  /* 分区设置：一行 = 名字 / X / Z / 开·关 / ◎定位 / 删除 */
+  .zrow { display: grid; grid-template-columns: 1fr 82px 82px auto auto auto; gap: 6px; align-items: center;
     padding: 6px 0; border-top: 1px solid #21262d; }
   .zrow.hd { border-top: 0; padding: 0 0 2px; }
   .zrow.hd span { font-size: 10.5px; color: #6e7681; }
+  /* 「关」= 这个区整区不摆（设备留在清单里，只是这一区看不见）。关掉的区在设置里也要一眼认出来 */
+  .zrow.off .tx { opacity: .45; }
+  .mini.on2 { color: #f85149; border-color: #6e2b2b; }
 
   #tip { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 10;
     width: min(460px, calc(100vw - 32px)); max-height: 70vh; overflow-y: auto; padding: 12px 14px;
@@ -170,6 +179,7 @@
   .bar > i { display: block; height: 100%; width: 0; border-radius: 2px;
     transition: width .45s ease, background .45s ease; }
   .sub2 { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 5px; font-size: 9.5px; color: #6e7681; }
+  .sub2:empty { display: none; }   /* 实测那台没 foot 的卡片（CPU/磁盘）不该多出一截 5px 的空档 */
   .sub2 b { color: #c9d1d9; font-weight: 600; font-variant-numeric: tabular-nums; }
   .miniSpark { margin-top: 4px; }
   .miniSpark svg { display: block; width: 100%; height: 26px; }
@@ -187,6 +197,9 @@
   .sumbar b { color: #e6edf3; font-variant-numeric: tabular-nums; }
   .drk { margin-top: 6px; padding: 7px 8px; background: #0d1117; border: 1px solid #21262d; border-radius: 7px; }
   .drk svg { display: block; width: 100%; height: 42px; }
+  /* 一节都没建起来时的那句话（没填地址 / 还没抓到帧） */
+  .pnote { padding: 10px 12px; background: #0d1117; border: 1px solid #21262d; border-radius: 7px;
+    font-size: 11.5px; color: #8b949e; line-height: 1.5; }
   .drow { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; font-size: 10.5px; color: #8b949e; }
   .drow b { color: #e6edf3; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
   .thr { display: grid; grid-template-columns: 46px 1fr 34px; gap: 6px; align-items: center;
@@ -820,7 +833,7 @@ const tierOf = (k) => TIERS.find((t) => t.key === k);
 
 let seq = 0;
 // zone 空串 = 按档位自动落区；填了就是手动指定（下拉里那格）
-const mkDev = (short, tier) => ({ id: ++seq, short, tier, zone: "", power: true, os: "win", host: "", user: "", pass: "" });
+const mkDev = (short, tier) => ({ id: ++seq, short, tier, zone: "", power: true, hidden: false, os: "win", host: "", user: "", pass: "" });
 // file:// 打开（连不上配置文件）时用的内置默认，和 serve.mjs 首次生成的 设备清单.json 一致
 let devices = [
   mkDev("笔记本", "laptop"), mkDev("ITX", "itx"), mkDev("mATX", "matx"),
@@ -1035,10 +1048,13 @@ function dropStation(h) {
 }
 
 // 按 devices 重造这张地图：台数 / 次序 / 档位 / 落区全部跟着列表走，不存在第二份名单
+// 不进来的有两种：① d.hidden（这台单独藏了）② 落在"已关闭分区"里的（z.off）。
+// 两种都只是不摆出来，那一行还留在 设备清单.json 里，分区和归属也一个字没动 —— 放出来就原样回来。
+const zoneOffOf = (d) => { const z = ZONES.find((q) => q.key === zoneKeyOf(d)); return !!(z && z.off); };
 function rebuild() {
   for (const h of holders) dropStation(h);
   clearZoneMarks();
-  const built = devices.map((d) => {
+  const built = devices.filter((d) => !d.hidden && !zoneOffOf(d)).map((d) => {
     const model = paint(tierOf(d.tier).make());
     const holder = new THREE.Group();
     holder.add(model);
@@ -1109,6 +1125,9 @@ function clearZoneMarks() {
 }
 function drawZoneMarks(built) {
   for (const z of ZONES) {
+    // 关掉的分区（z.off）：地面上不画角铁、不挂区名 —— 落到这个区里的设备在 rebuild 那一步就被筛掉了，
+    // 改回来原样回来（key / 名字 / 位置 / 归属一个字没动）。
+    if (z.off) continue;
     const mine = built.filter((h) => h.zone === z.key);
     const cell = new THREE.Group();
     cell.position.set(z.at[0], 0, z.at[1]);   // 盒子以区中心为原点，底面落在 y=0
@@ -1151,20 +1170,19 @@ const tipEl = document.getElementById("tip");
 const liveOf = (d) => !!(d.host && d.user);
 const srcTag = (d) => (!liveOf(d) ? "模拟" : d.frame ? "实测" : d.probeErr ? "抓不到" : "待抓");
 
-// 每一节自己标：这节的数从哪儿来。SSH 一帧给不了速率，所以磁盘 / 网络即便抓到了也仍标"模拟"
+// 每一节自己标：这节的数从哪儿来。
+// 填了地址 = 只用真数据（你 2026-09-24 那句"填了地址就不需要假数据了"）：抓到帧就是"实测 HH:MM"，
+// 没抓到就是"抓不到"，这一节里取不到的字段**整行/整节消失**，不会退回模拟值。
 function srcOf(key, d) {
   if (!liveOf(d)) return { t: "模拟", c: "sim" };
-  if (!d.frame) return { t: d.probeErr ? "抓不到，仍模拟" : "待抓，仍模拟", c: "bad" };
-  if (key === "cpu") return { t: "整机占用 实测 · 分布分摊", c: "real" };
-  if (key === "mem") return { t: "容量 实测", c: "real" };
-  if (key === "gpu") return d.frame.gpu ? { t: "一帧实测", c: "real" } : { t: "未抓到 GPU", c: "bad" };
-  return { t: "模拟（快照无速率）", c: "sim" };
+  if (!d.frame) return { t: d.probeErr ? "抓不到" : "待抓", c: "bad" };
+  return { t: "实测 " + hhmm(d.frame.at), c: "real" };
 }
 
 // 一帧快照给出的"这台有多忙"（0~100）：
 //   Windows 直接给占用率百分比（CIM 的 LoadPercentage）；
-//   linux 给的是 1 分钟负载均值，按 负载 ÷ 核数 × 100 折成占用率。
-// 看板上的总使用率、脚下游走分级，凡是"这台忙不忙"的地方都走这一个函数，别各算各的。
+//   linux 没有这个数，探针用刚采到的每逻辑核占用率求了平均塞进 cpuPct；
+//   实在都没有，才退回"1 分钟负载 ÷ 核数"那条老换算。
 const framePct = (f) => {
   if (!f) return null;
   if (typeof f.cpuPct === "number") return clampv(f.cpuPct, 0, 100);
@@ -1172,18 +1190,21 @@ const framePct = (f) => {
   return null;
 };
 
-// 一帧快照能给的：主机名 / 系统 / 核数 / 负载 / 内存总量与已用 / 磁盘容量 / 有没有卡。
-// 给不了的：各核分布、频率、温度、磁盘与网络的读写速率——这些仍然是模拟值，界面上标出来。
+// 一帧快照能给出什么，"该建哪几节"就按什么算：拿不到的那节**整节不出现**，不拿档位规格去补。
+// 填了地址但还没抓到帧（或抓不到）→ 全部数 0 = 一节都不建，面板上只留一句说明。
 function hwOf(d) {
   const base = TIER_HW[d.tier] || TIER_HW.matx;
   const f = d.frame;
-  if (!f) return base;
+  if (!f) return liveOf(d) ? { cores: 0, gpus: 0, disks: 0, nics: 0, mem: 0, live: true } : base;
+  const cpu = f.cpu || {};
   return {
-    cores: f.cores > 0 ? Math.min(CORES_CAP, f.cores) : base.cores,
-    gpus: f.gpu ? 1 : base.gpus,
-    disks: base.disks,
-    nics: base.nics,
-    mem: f.memTotalMb ? Math.round(f.memTotalMb / 1024) : base.mem,
+    // 逻辑处理器数 = 每核占用率那个数组的长度；探针没给就退回它报的核数
+    cores: (cpu.perCore && cpu.perCore.length) || f.cores || 0,
+    gpus: (f.gpus || []).length + (f.gpuNames || []).length,
+    disks: (f.disks || []).length || (f.physDisks || []).length,
+    nics: nicsOf(f).length,
+    mem: f.memTotalMb ? Math.round(f.memTotalMb / 1024) : 0,
+    live: true,
   };
 }
 async function probeDevice(d) {
@@ -1208,10 +1229,13 @@ async function probeDevice(d) {
 // 抓不到的不影响别的：那台继续走模拟数据，屏上标"抓不到"。
 async function bootProbe() {
   for (const d of devices) {
-    if (!liveOf(d)) continue;
+    // 藏起来的 / 落在关闭分区里的不抓：墙上都看不见它，没必要为它去敲那台机器
+    if (d.hidden || zoneOffOf(d) || !liveOf(d)) continue;
     await probeDevice(d);
     paintZoneColors();
-    paintPanel(true);
+    // 抓到一帧就重画头部：面板是"按这一帧该建哪几节"建出来的，帧一到签名就变了。
+    // 这里必须走 refreshPerfHead（内部按 panelSig 决定要不要 buildPanel），不能只 paintPanel。
+    refreshPerfHead();
     await new Promise((r) => setTimeout(r, 1200));
   }
   sync();
@@ -1229,27 +1253,53 @@ function tipResult(d, res) {
     showTip('<div class="th"><b>连通性测试 · ' + esc(d.short) + '</b><span class="st no">失败</span>'
       + '<span class="grow"></span><button class="mini" id="tipx" type="button">关闭</button></div>'
       + '<div class="err">' + esc(res.error) + '</div>'
-      + '<div class="fine">这台继续保持模拟数据。凭据存在本目录的设备清单.json（明文），本服务不写日志、不回显。</div>');
+      + '<div class="fine">这台不摆模拟数：面板上只显示 — 和"还没抓到的帧"。凭据存在本目录的设备清单.json（明文），本服务不写日志、不回显。</div>');
   } else {
     const f = res.frame;
-    const pct = framePct(f);
+    const c = f.cpu || {}, m = f.mem || {};
+    const gs = f.gpus || [], gn = f.gpuNames || [];
+    const g0 = gs[0];
+    const nics = nicsOf(f);
+    const volBytes = (f.disks || []).reduce((a, v) => a + (v.sizeBytes || 0), 0);
+    // 这一栏就是回答"哪些取得到、哪些取不到"：取到的照样写，取不到的不写值、在下面单列原因。
     const rows = [
-      ["主机名", f.hostname, true],
-      ["系统", f.os || "未报", !!f.os],
-      ["核心数", f.cores ? f.cores + " 核" : "未报", !!f.cores],
-      // 两种系统给的不是同一种数：Windows 报占用率百分比，linux 报的才是负载均值 —— 别混着标
-      typeof f.cpuPct === "number"
-        ? ["CPU 占用", pct == null ? "未报" : pct.toFixed(0) + "%", pct != null]
-        : ["1 分钟负载", f.load1 ? f.load1.toFixed(2) : "未报", !!f.load1],
-      ["内存", f.memTotalMb ? (f.memUsedMb / 1024).toFixed(1) + " / " + (f.memTotalMb / 1024).toFixed(1) + " GB" : "未报", !!f.memTotalMb],
-      ["磁盘（根分区）", f.diskTotalBytes ? (f.diskUsedBytes / f.diskTotalBytes * 100).toFixed(0) + "% 已用" : "未报", !!f.diskTotalBytes],
-      ["GPU", f.gpu ? f.gpu.util + "% · 显存 " + f.gpu.memUsedMb + "/" + f.gpu.memTotalMb + " MB · " + f.gpu.temp + "°C" : "未抓到 nvidia-smi", !!f.gpu],
-      ["各核分布 / 频率 / 读写速率 / 网络", "一次快照给不了，仍是模拟值", false],
+      ["主机名", f.hostname, !!f.hostname],
+      ["系统", f.os, !!f.os],
+      ["开机时长", f.uptimeSec ? (f.uptimeSec / 3600).toFixed(1) + " 小时" : "", !!f.uptimeSec],
+      ["CPU 型号", c.model, !!c.model],
+      ["物理核 / 逻辑线程", (f.cores || c.phys || "") + (c.logical ? " 核 · " + c.logical + " 线程" : " 核"), !!(f.cores || c.phys)],
+      ["每核占用", (c.perCore || []).length ? (c.perCore || []).length + " 个逻辑处理器逐个报" : "", (c.perCore || []).length > 0],
+      ["P / E 核", (c.pcls || []).length ? c.pcls.join(" ") + "（P=性能核 E=能效核）" : "", (c.pcls || []).length > 0],
+      ["CPU 频率", c.curMhz ? c.curMhz + " MHz" + (c.maxMhz ? " / 上限 " + c.maxMhz + " MHz" : "") : "", !!c.curMhz],
+      ["CPU 温度", c.tempC != null ? c.tempC + " °C" : "", c.tempC != null],
+      ["内存", f.memTotalMb ? (f.memUsedMb / 1024).toFixed(1) + " / " + (f.memTotalMb / 1024).toFixed(1) + " GB" : "", !!f.memTotalMb],
+      ["内存规格", [m.type, m.speedMhz ? m.speedMhz + " MHz" : "", m.modules ? m.modules + " 条" : ""].filter(Boolean).join(" · "), !!(m.type || m.speedMhz || m.modules)],
+      ["缓存 / Swap", (m.cacheMb ? (m.cacheMb / 1024).toFixed(1) + " GB 缓存" : "") + (m.swapTotalMb ? " · Swap " + (m.swapUsedMb / 1024).toFixed(1) + "/" + (m.swapTotalMb / 1024).toFixed(1) + " GB" : ""), !!(m.cacheMb || m.swapTotalMb)],
+      ["显卡", gs.length
+        ? gs.length + " 张 · " + g0.name + (g0.util != null ? " · " + g0.util + "% · 显存 " + (g0.memUsedMb / 1024).toFixed(1) + "/" + (g0.memTotalMb / 1024).toFixed(1) + " GB" : "") + (g0.tempC != null ? " · " + g0.tempC + "°C" : "")
+        : gn.length ? gn.length + " 张仅型号：" + gn.join(" / ") : "", gs.length > 0],
+      ["磁盘", (f.disks || []).length
+        ? (f.disks.length + " 个卷（" + f.disks.map((v) => v.id).join(" ") + "）· 合计 " + (volBytes / 1073741824).toFixed(0) + " GB")
+        : (f.physDisks || []).length ? (f.physDisks || []).length + " 块物理盘" : "", (f.disks || []).length + (f.physDisks || []).length > 0],
+      ["磁盘读写速率", (f.disks || []).some((v) => v.readBps != null) ? "按卷报（1 秒两采样）" : "", (f.disks || []).some((v) => v.readBps != null)],
+      ["网络", nics.length
+        ? nics.length + " 张" + (nics.filter((n) => n.ip).length ? " · " + nics.filter((n) => n.ip).map((n) => n.name + "=" + n.ip).slice(0, 3).join(" ") : "")
+        : "", nics.length > 0],
+      ["网卡链路 / 上下行速率", nics.some((n) => n.rxBps != null) ? "按张报（1 秒两采样）" : "", nics.some((n) => n.rxBps != null)],
+    ];
+    // 这台机器取不到的（写了才知道"面板上为什么没有这一格"，不是抓失败）
+    const cant = [
+      "CPU 温度 / 实时频率 · Windows 侧没有这两个计数器（linux 侧要 lm-sensors / /proc/cpuinfo）",
+      "磁盘 IO 忙率 / 温度 / 延迟 · 一次快照给不了，要累计计数器或 smartctl",
+      "网络累计流量 / 丢包 / 延迟 · 一次快照给不了（要 /proc/net/snmp 这类累计值）",
+      "内存通道数 · SMBIOS 里没这一项（条数能取到）",
+      "只报了型号的显卡 · 没装/没有 nvidia-smi 时只拿得到型号，利用率和显存不编",
     ];
     showTip('<div class="th"><b>连通性测试 · ' + esc(d.short) + '（' + esc(f.hostname || d.host) + '）</b>'
       + '<span class="st ok">成功</span><span class="grow"></span><button class="mini" id="tipx" type="button">关闭</button></div>'
-      + '<table>' + rows.map(([k, v, got]) => '<tr><td>' + esc(k) + '</td><td class="' + (got ? "" : "bad") + '"><b>' + esc(v) + "</b></td></tr>").join("") + "</table>"
-      + '<div class="fine">抓不到的行标红。这一帧已经喂给右侧看板的对应字段（核数 / 内存总量 / 是否带卡），其余仍是模拟。</div>');
+      + '<table>' + rows.map(([k, v, got]) => '<tr><td>' + esc(k) + '</td><td class="' + (got ? "" : "bad") + '"><b>' + esc(v || "取不到") + "</b></td></tr>").join("") + "</table>"
+      + '<div class="fine">这一帧里有的字段全部喂给右侧看板；面板上取不到的行整行不显示，不留"—"假装有数。以下这几项这套采集路径拿不到：</div>'
+      + '<div class="fine">· ' + cant.map(esc).join("<br>· ") + "</div>");
   }
   document.getElementById("tipx").addEventListener("click", hideTip);
 }
@@ -1266,7 +1316,7 @@ const tempColor = (t) => "hsl(" + Math.round(195 - clampv((t - 40) / 50, 0, 1) *
 const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
 // MB/s 进，带单位出（参考里的 fmtSpeed）
 function fmtSpeed(mbps) {
-  if (mbps < 0.01) return ["0", "MB/s"];
+  if (mbps < 0.01) return ["0", "B/s"];
   if (mbps < 1) return [(mbps * 1024).toFixed(0), "KB/s"];
   if (mbps < 1024) return [mbps.toFixed(1), "MB/s"];
   return [(mbps / 1024).toFixed(2), "GB/s"];
@@ -1309,11 +1359,156 @@ const NIC_NAMES = [
   { name: "Wi-Fi 6E", type: "Wireless", link: 1200 },
 ];
 
+// ---------- 实测项（2026-09-24）：填了地址的设备只用真数据 ----------
+// 规则只有一条，全在这几个访问器里落实：**取不到就返回 null**。
+// 然后：
+//   · bars / foot 里 pct 与 text 都变 null 的 → 这一行整行不建（buildCard 里筛掉）
+//   · items 为空 → 这一节整节不建（buildPanel 里就跳过了）
+//   · stats 里 v 为 null 的 → 那一格显示 —（格数固定，不能一帧一个样）
+// 模拟项永远返回数/串，所以这条规则对它们是无操作 —— 没填地址的那条路一个字都没改。
+const hhmm = (iso) => {
+  const t = new Date(iso);
+  return isNaN(t) ? "" : String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0");
+};
+const gbOfBytes = (b) => (typeof b === "number" && b > 0 ? b / 1073741824 : null);
+const mbOfBytes = (b) => (typeof b === "number" && b >= 0 ? b / 1048576 : null);
+const gbOfMb = (mb) => (typeof mb === "number" && mb > 0 ? mb / 1024 : null);
+const avgOf = (a) => (a && a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+// 整数照样写成整数：模拟那几台的内存总量是 32 这种整数，别被 toFixed(1) 变成 "32.0"
+const gbTxt = (v, d) => (v == null ? null : Number.isInteger(v) ? String(v) : v.toFixed(d == null ? 1 : d));
+const memPct = (m) => (m.used != null && m.total ? (m.used / m.total) * 100 : null);
+// 实测那台的 used 本身已经是不含可回收缓存的口径（linux 用 MemAvailable、win 用 FreePhysicalMemory 反推），
+// 再减一次 cache 就减重了；所以只有模拟那台（used/cache 是两笔独立假数）才减 cache。
+const memFreeGb = (m) => (m.total != null && m.used != null ? Math.max(0, m.total - m.used - (m.live ? 0 : (m.cache || 0))) : null);
+// 实测那种"一个挂载点一张卡"的抬头就是挂载点（C:\ / /），模拟那台还是 DISK 0/1/2…
+const diskName = (d) => (d.live ? d.vol || d.name || "DISK " + d.id : "DISK " + d.id);
+// 卷的抬头取哪个字段，两条脚本给的东西不一样：
+//   · windows 的 id 就是盘符（"C:"）—— 盘符本身就是最认得出的名字，直接用，别拿卷标（卷标常为空）顶
+//   · linux 的 id 是分区名（"nvme0n1p2"），label 才是挂载点（"/"）—— 挂载点才是他要认的那个名字
+const volName = (v) => {
+  const id = String((v && v.id) || "");
+  if (/^[A-Za-z]:$/.test(id)) return id;
+  return String((v && v.label) || "").trim() || id;
+};
+// 型号串要能整头摆下：'NVIDIA GeForce RTX 2080 Ti' 26 字符，卡面放得下，别在中间切。
+// 只砍三种没有信息量的尾巴：奔着 intel/amd 那套产品名后缀（"CPU @ 2.60GHz"）、
+// "6-Core Processor" 里的核数（核数已经有单独一格了）、还有光秃秃的 "Processor"。
+const shortName = (n) => {
+  if (!n) return null;
+  const m = String(n)
+    .replace(/\((R|TM)\)/gi, "")
+    .replace(/CPU @.*$/i, "")
+    .replace(/\s+\d+\s*-\s*(Core|Thread)s?\s+Processor\s*$/i, "")
+    .replace(/\s+Processor\s*$/i, "")
+    .trim();
+  return m.length > 30 ? m.slice(0, 29) + "…" : m;
+};
+const vendorOf = (n) => {
+  const s = String(n || "").toLowerCase();
+  if (!s) return null;
+  if (/nvidia|geforce|quadro|rtx|gtx|tesla/.test(s)) return "NVIDIA";
+  if (/amd|radeon|\bati\b/.test(s)) return "AMD";
+  if (/intel|iris|uhd graphics|hd graphics/.test(s)) return "Intel";
+  if (/apple|\bm[0-9] (pro|max|ultra)\b/.test(s)) return "Apple";
+  return String(n).split(/\s+/)[0];
+};
+// CPU：一张卡 = 一个逻辑处理器。kind（P/E）只有 Windows 混合架构那台报得出来，没有就是 null
+// （标签位留空，不去猜）；温度/线程数/历史这三样一次快照给不了，一律 null。
+const liveCpu = (f) => ((f.cpu && f.cpu.perCore) || []).map((u, i) => ({
+  id: i, live: true,
+  kind: f.cpu.pcls && f.cpu.pcls[i] ? f.cpu.pcls[i] : null,
+  usage: u,
+  freq: f.cpu.perMhz && f.cpu.perMhz[i] != null ? f.cpu.perMhz[i] / 1000 : null,
+  temp: null, threads: [], history: [],
+}));
+const liveMem = (f) => {
+  if (!f.memTotalMb) return [];
+  const m = f.mem || {};
+  const total = gbOfMb(f.memTotalMb), used = gbOfMb(f.memUsedMb);
+  return [{
+    id: 0, live: true, total, used,
+    cache: gbOfMb(m.cacheMb),
+    swapTotal: gbOfMb(m.swapTotalMb), swapUsed: gbOfMb(m.swapUsedMb),
+    type: m.type || null, speed: m.speedMhz || null, modules: m.modules || null,
+    history: [],
+  }];
+};
+// 显卡：nvidia-smi 有的那几张带全套指标；只有型号的（lspci / WMI 报的名字）指标全 null，
+// 卡片就只剩"型号"这一件事 —— 不编利用率。
+const liveGpu = (f) => {
+  const out = (f.gpus || []).map((g, i) => ({
+    id: i, live: true, name: g.name || null, short: shortName(g.name) || ("GPU " + i),
+    vendor: vendorOf(g.name), usage: g.util,
+    memTotal: gbOfMb(g.memTotalMb), memUsed: gbOfMb(g.memUsedMb),
+    temp: g.tempC, power: g.powerW, powerLimit: g.powerLimitW,
+    fan: g.fanPct, coreClock: g.clockMhz, driver: g.driver || null, history: [],
+  }));
+  for (const n of (f.gpuNames || [])) {
+    out.push({ id: out.length, live: true, name: n, short: shortName(n) || n, vendor: vendorOf(n),
+      usage: null, memTotal: null, memUsed: null, temp: null, power: null, powerLimit: null,
+      fan: null, coreClock: null, driver: null, history: [] });
+  }
+  return out;
+};
+// 磁盘：优先按"卷"（有容量 + 读写速率），没有卷才退回整块物理盘（只有容量）。
+// 一次快照没有 IO 忙率 / 温度 / 延迟，全 null；大数字改用**容量占用率**（这是真数）。
+const liveDisk = (f) => {
+  if ((f.disks || []).length) return f.disks.map((v, i) => ({
+    id: i, live: true, name: v.model || null, vol: volName(v), part: String(v.id || "") || null,
+    type: v.media || v.fs || null, fs: v.fs || null, label: v.label || null,
+    bus: v.bus || null, media: v.media || null,
+    total: gbOfBytes(v.sizeBytes), free: gbOfBytes(v.freeBytes),
+    used: v.sizeBytes > 0 ? gbOfBytes(v.sizeBytes - v.freeBytes) : null,
+    readSpeed: mbOfBytes(v.readBps), writeSpeed: mbOfBytes(v.writeBps),
+    busy: v.sizeBytes > 0 ? ((v.sizeBytes - v.freeBytes) / v.sizeBytes) * 100 : null,
+    temp: null, latency: null, history: [],
+  }));
+  return (f.physDisks || []).map((p, i) => ({
+    id: i, live: true, name: p.name, vol: null, part: null, type: p.media || null,
+    fs: null, label: null, bus: p.bus || null, media: p.media || null,
+    total: gbOfBytes(p.sizeBytes), free: null,
+    used: null, readSpeed: null, writeSpeed: null, busy: null, temp: null, latency: null, history: [],
+  }));
+};
+// 容器/虚拟桥的接口名：vethXXXX、docker0、br-XXXX、virbr0、tap0 —— 这些是别人家的管子，
+// 一台机上能冒出十几条，全摆到墙上就把真网卡淹了。物理口一律留，隧道口（zt/tun/wg/tailscale）留，
+// 只滤掉这一串前缀。规则写在这儿，hwOf 和 liveNet 共用，免得"几张卡"和"摆几张卡"对不上。
+const nicsOf = (f) => ((f && f.nics) || []).filter((n) => !/^(veth|docker|br-|virbr|tap|dummy)/i.test(String(n.name || "")));
+const liveNet = (f) => nicsOf(f).map((n, i) => ({
+  id: i, live: true, name: n.name, type: n.virtual ? "虚拟" : "物理",
+  link: n.linkMbps || 0, up: n.up, ip: n.ip || null, mac: n.mac || null,
+  virtual: n.virtual, desc: n.desc || null,
+  downSpeed: mbOfBytes(n.rxBps), upSpeed: mbOfBytes(n.txBps),
+  history: [], downHistory: [], upHistory: [],
+}));
+
+// 这五条就是"一帧真数据 → 面板项"的翻译层。buildPanel 只认这张表：
+// 填了地址又抓到帧的设备，每一节都由它生成；没填地址的、还没抓到帧的，才走原来那套 count+make。
+const LIVE = { cpu: liveCpu, mem: liveMem, gpu: liveGpu, disk: liveDisk, net: liveNet };
+
 const RES = {
   cpu: {
     title: "CPU", unit: "核", dense: true, heat: true, summary: true,
     count: (hw) => Math.min(CORES_CAP, hw.cores),
-    sub: (its) => pCountOf(its.length) + "P + " + (its.length - pCountOf(its.length)) + "E · " + its.length + " 核",
+    // 型号是他点名要加的（"6 核 后面建议 +cpu 型号"）。实测那台拼在核数后面；
+    // P/E 那半只有混合架构报得出来，报不出来就只写核数，不去按比例猜。
+    sub: (its, d) => {
+      const c = d && d.frame && d.frame.cpu ? d.frame.cpu : null;
+      // 没抓到帧的（模拟那几台）照旧按"每三个核里两个 E"分摊 —— 模拟卡的 kind 是按**整机核数**分的，
+      // 而墙上只摆前 6 张，直接数 kind 会得出 "6P + 0E" 这种一看就不对的串。
+      if (!c) return pCountOf(its.length) + "P + " + (its.length - pCountOf(its.length)) + "E · " + its.length + " 核";
+      const model = shortName(c.model);
+      const p = its.filter((x) => x.kind === "P").length;
+      const e = its.filter((x) => x.kind === "E").length;
+      if (p + e > 0) {
+        const phys = c.phys || p + e;
+        return p + "P + " + e + "E · " + phys + " 核" + (model ? " · " + model : "");
+      }
+      // 实测的卡是**一个逻辑处理器一张**，所以抬头必须说线程，不能写成 "12 核" 让他以为是 12 个物理核
+      const phys = c.phys || 0;
+      const logi = c.logical || its.length;
+      return (phys ? phys + " 核 · " : "") + logi + " 线程" + (model ? " · " + model : "");
+    },
     make: (i, hw) => {
       const isP = i < pCountOf(hw.cores);
       const base = 8 + Math.random() * 20;
@@ -1323,28 +1518,34 @@ const RES = {
         history: hist(60, base, 10),
       };
     },
-    label: (c) => "Core " + c.id,
-    tag: (c) => c.kind,
-    tagCls: (c) => (c.kind === "P" ? "p" : "e"),
+    label: (c) => (c.live ? "线程 " + c.id : "Core " + c.id),
+    tag: (c) => c.kind || "",
+    tagCls: (c) => (c.kind === "P" ? "p" : c.kind === "E" ? "e" : ""),
     pct: (c) => c.usage,
-    big: (c) => [c.usage.toFixed(0), "%", usageColor(c.usage)],
+    big: (c) => (c.usage == null ? null : [c.usage.toFixed(0), "%", usageColor(c.usage)]),
     bars: [
-      { k: "使用率", pct: (c) => c.usage, text: (c) => c.usage.toFixed(0) + "%", color: (c) => usageColor(c.usage) },
-      { k: "频率", pct: (c) => (c.freq / 5.2) * 100, text: (c) => c.freq.toFixed(2) + " GHz", color: () => "#58a6ff" },
+      { k: "使用率", pct: (c) => c.usage, text: (c) => (c.usage == null ? null : c.usage.toFixed(0) + "%"), color: (c) => (c.usage == null ? null : usageColor(c.usage)) },
+      { k: "频率", pct: (c) => (c.freq == null ? null : (c.freq / 5.2) * 100), text: (c) => (c.freq == null ? null : c.freq.toFixed(2) + " GHz"), color: () => "#58a6ff" },
     ],
     foot: [
-      { k: "温度", text: (c) => c.temp.toFixed(0) + "°C", color: (c) => tempColor(c.temp) },
-      { k: "线程", text: (c) => c.threads.length + "T" },
+      { k: "温度", text: (c) => (c.temp == null ? null : c.temp.toFixed(0) + "°C"), color: (c) => (c.temp == null ? null : tempColor(c.temp)) },
+      { k: "线程", text: (c) => (c.threads && c.threads.length ? c.threads.length + "T" : null) },
     ],
-    stats: (its) => {
-      const avg = mean(its.map((c) => c.usage));
-      const hot = its.reduce((a, b) => (b.usage > a.usage ? b : a));
-      const maxT = Math.max(...its.map((c) => c.temp));
+    // 每格固定 4 个：格数不能一帧一个样，不然 buildSection 存下的 ref 会跟当前结果错位。
+    // 取不到的那格 v 给 null，paintPanel 会把它显示成 —。
+    stats: (its, d) => {
+      const us = its.map((c) => c.usage).filter((v) => Number.isFinite(v));
+      const fs = its.map((c) => c.freq).filter((v) => Number.isFinite(v));
+      const ts = its.map((c) => c.temp).filter((v) => Number.isFinite(v));
+      const pkg = d && d.frame && d.frame.cpu ? d.frame.cpu.tempC : null;   // linux 的整包温度（sensors）
+      const t = ts.length ? Math.max(...ts) : pkg;
+      const avg = avgOf(us);
+      const hotId = us.length ? us.indexOf(Math.max(...us)) : -1;
       return [
-        { k: "总使用率", v: avg.toFixed(1), u: "%", color: usageColor(avg) },
-        { k: "平均频率", v: mean(its.map((c) => c.freq)).toFixed(2), u: "GHz" },
-        { k: "最高温度", v: maxT.toFixed(0), u: "°C", color: tempColor(maxT) },
-        { k: "最忙核心", v: "Core " + hot.id + " · " + hot.usage.toFixed(0) + "%", sm: true },
+        { k: "总使用率", v: avg == null ? null : avg.toFixed(1), u: "%", color: avg == null ? null : usageColor(avg) },
+        { k: "平均频率", v: fs.length ? mean(fs).toFixed(2) : null, u: "GHz" },
+        { k: "最高温度", v: t == null ? null : t.toFixed(0), u: "°C", color: t == null ? null : tempColor(t) },
+        { k: its[0] && its[0].live ? "最忙线程" : "最忙核心", v: hotId >= 0 ? (its[0] && its[0].live ? "线程 " : "Core ") + its[hotId].id + " · " + us[hotId].toFixed(0) + "%" : null, sm: true },
       ];
     },
     // 抓到的那一帧只覆盖总使用率（win 用占用率、linux 用负载均值÷核数）；各核分布仍是分摊出来的
@@ -1355,11 +1556,11 @@ const RES = {
       st[0].color = usageColor(pct);
     },
     detail: (c) => [
-      { k: "类型", v: c.kind + "-Core" },
-      { k: "频率", v: c.freq.toFixed(2) + " GHz" },
-      { k: "温度", v: c.temp.toFixed(1) + " °C", color: tempColor(c.temp) },
+      { k: "类型", v: c.kind ? c.kind + "-Core" : null },
+      { k: "频率", v: c.freq == null ? null : c.freq.toFixed(2) + " GHz" },
+      { k: "温度", v: c.temp == null ? null : c.temp.toFixed(1) + " °C", color: c.temp == null ? null : tempColor(c.temp) },
     ],
-    threads: (c) => c.threads.map((t) => ({ k: "线程 " + t.id, pct: t.usage, text: t.usage.toFixed(0) + "%", color: usageColor(t.usage) })),
+    threads: (c) => (c.threads || []).map((t) => ({ k: "线程 " + t.id, pct: t.usage, text: t.usage.toFixed(0) + "%", color: usageColor(t.usage) })),
     step: (c, t, i) => {
       const wave = (Math.sin(t * 0.7) + 1) / 2;
       const per = (Math.sin(t * 1.1 + i * 0.9) + 1) / 2;
@@ -1380,32 +1581,42 @@ const RES = {
 
   mem: {
     title: "内存", unit: "条", count: (hw) => (hw.mem > 0 ? 1 : 0),
-    sub: (its) => its[0].type + " · " + its[0].speed + " MHz",
+    // 用户第 4 条要的就是 "DDR5 · 6000 MHz" 这种规格串。实测那台按 类型 · 频率 · 条数 拼，
+    // 哪一段取不到就少哪一段 —— 他机器里没有 DDR5，那就照实写 DDR4，不拿 DDR5 顶上去。
+    sub: (its) => {
+      const m = its[0];
+      if (!m.live) return m.type + " · " + m.speed + " MHz";
+      return [m.type, m.speed == null ? null : m.speed + " MHz", m.modules == null ? null : m.modules + " 条"]
+        .filter(Boolean).join(" · ") || "规格未知";
+    },
     make: (i, hw) => ({
       id: i, total: hw.mem, used: hw.mem * 0.44, cache: hw.mem * 0.18, swapTotal: 8, swapUsed: 0.9,
       type: "DDR5", speed: 6000, channels: 2, history: hist(60, 45, 15),
     }),
     label: () => "物理内存",
-    tag: (m) => m.type,
-    pct: (m) => (m.used / m.total) * 100,
-    big: (m) => { const p = (m.used / m.total) * 100; return [p.toFixed(1), "%", usageColor(p)]; },
+    tag: (m) => m.type || "",
+    pct: (m) => memPct(m),
+    big: (m) => { const p = memPct(m); return p == null ? null : [p.toFixed(1), "%", usageColor(p)]; },
     bars: [
-      { k: "已用", pct: (m) => (m.used / m.total) * 100, text: (m) => m.used.toFixed(1) + " GB", color: (m) => usageColor((m.used / m.total) * 100) },
-      { k: "缓存", pct: (m) => (m.cache / m.total) * 100, text: (m) => m.cache.toFixed(1) + " GB", color: () => "#bc8cff" },
-      { k: "Swap", pct: (m) => (m.swapUsed / m.swapTotal) * 100, text: (m) => m.swapUsed.toFixed(1) + " / " + m.swapTotal + " GB", color: () => "#d29922" },
+      { k: "已用", pct: (m) => memPct(m), text: (m) => (m.used == null ? null : gbTxt(m.used) + " GB"), color: (m) => { const p = memPct(m); return p == null ? null : usageColor(p); } },
+      { k: "缓存", pct: (m) => (m.cache == null || !m.total ? null : (m.cache / m.total) * 100), text: (m) => (m.cache == null ? null : gbTxt(m.cache) + " GB"), color: () => "#bc8cff" },
+      { k: "Swap", pct: (m) => (m.swapUsed == null || !m.swapTotal ? null : (m.swapUsed / m.swapTotal) * 100), text: (m) => (m.swapUsed == null || m.swapTotal == null ? null : gbTxt(m.swapUsed) + " / " + gbTxt(m.swapTotal) + " GB"), color: () => "#d29922" },
     ],
+    // 通道数一次快照取不到，那是"内存控制器怎么接的"；能取到的是**条数**，所以实测那台给条数、不给通道。
     foot: [
-      { k: "可用", text: (m) => Math.max(0, m.total - m.used - m.cache).toFixed(1) + " GB" },
-      { k: "通道", text: (m) => (m.channels === 2 ? "双通道" : m.channels + " 通道") },
+      { k: "可用", text: (m) => { const v = memFreeGb(m); return v == null ? null : gbTxt(v) + " GB"; } },
+      { k: "通道", text: (m) => (m.live ? null : m.channels === 2 ? "双通道" : m.channels + " 通道") },
+      { k: "条数", text: (m) => (m.live && m.modules != null ? m.modules + " 条" : null) },
     ],
     stats: (its) => {
       const m = its[0];
-      const p = (m.used / m.total) * 100;
+      const p = memPct(m);
+      const uc = m.used == null ? null : m.used + (m.cache || 0);
       return [
-        { k: "使用率", v: p.toFixed(1), u: "%", color: usageColor(p) },
-        { k: "已用+缓存", v: (m.used + m.cache).toFixed(1), u: "GB" },
-        { k: "Swap", v: ((m.swapUsed / m.swapTotal) * 100).toFixed(0), u: "%" },
-        { k: "总计", v: m.total + " GB", sm: true },
+        { k: "使用率", v: p == null ? null : p.toFixed(1), u: "%", color: p == null ? null : usageColor(p) },
+        { k: "已用+缓存", v: uc == null ? null : gbTxt(uc), u: "GB" },
+        { k: "Swap", v: m.swapUsed == null || !m.swapTotal ? null : ((m.swapUsed / m.swapTotal) * 100).toFixed(0), u: "%" },
+        { k: "总计", v: m.total == null ? null : gbTxt(m.total, 0) + " GB", sm: true },
       ];
     },
     real: (st, d) => {
@@ -1417,9 +1628,9 @@ const RES = {
       st[3].v = Math.round(f.memTotalMb / 1024) + " GB";
     },
     detail: (m) => [
-      { k: "规格", v: m.type + " · " + m.speed + " MHz" },
-      { k: "容量", v: m.used.toFixed(1) + " / " + m.total + " GB" },
-      { k: "Swap", v: m.swapUsed.toFixed(1) + " / " + m.swapTotal + " GB" },
+      { k: "规格", v: m.type ? m.type + (m.speed == null ? "" : " · " + m.speed + " MHz") : null },
+      { k: "容量", v: m.used == null || m.total == null ? null : gbTxt(m.used) + " / " + gbTxt(m.total) + " GB" },
+      { k: "Swap", v: m.swapUsed == null || m.swapTotal == null ? null : gbTxt(m.swapUsed) + " / " + gbTxt(m.swapTotal) + " GB" },
     ],
     step: (m, t) => {
       m.used = clampv(m.used + (clampv(m.total * (0.42 + Math.sin(t / 6) * 0.18 + Math.random() * 0.06), m.total * 0.15, m.total * 0.92) - m.used) * 0.08, 1, m.total - 2);
@@ -1428,7 +1639,7 @@ const RES = {
       pushHist(m.history, (m.used / m.total) * 100);
     },
     history: (m) => m.history,
-    histColor: (m) => usageColor((m.used / m.total) * 100),
+    histColor: (m) => { const p = memPct(m); return p == null ? "#58a6ff" : usageColor(p); },
   },
 
   gpu: {
@@ -1443,35 +1654,43 @@ const RES = {
         coreClock: 2150, history: hist(60, base, 15),
       };
     },
-    label: (g) => "GPU " + g.id,
-    tag: (g) => g.vendor,
-    tagCls: (g) => (g.vendor === "NVIDIA" ? "p" : "e"),
+    // 实测那台的卡片抬头直接写型号（用户第 5 条："显卡 一张 需要型号"）；
+    // 只从 WMI/lspci 拿到名字、没有 nvidia-smi 指标的那几张，指标位留空 —— 型号是真的，利用率不编。
+    label: (g) => (g.live && g.short ? g.short : "GPU " + g.id),
+    tag: (g) => g.vendor || "",
+    tagCls: (g) => (g.vendor === "NVIDIA" ? "p" : g.vendor === "Intel" ? "e" : ""),
     pct: (g) => g.usage,
-    big: (g) => [g.usage.toFixed(0), "%", usageColor(g.usage)],
+    big: (g) => (g.usage == null ? null : [g.usage.toFixed(0), "%", usageColor(g.usage)]),
     bars: [
-      { k: "核心", pct: (g) => g.usage, text: (g) => g.usage.toFixed(0) + "%", color: (g) => usageColor(g.usage) },
-      { k: "显存", pct: (g) => (g.memUsed / g.memTotal) * 100, text: (g) => g.memUsed.toFixed(1) + " / " + g.memTotal + " GB", color: () => "#58a6ff" },
-      { k: "功耗", pct: (g) => (g.power / g.powerLimit) * 100, text: (g) => g.power.toFixed(0) + " W", color: () => "#d29922" },
+      { k: "核心", pct: (g) => g.usage, text: (g) => (g.usage == null ? null : g.usage.toFixed(0) + "%"), color: (g) => (g.usage == null ? null : usageColor(g.usage)) },
+      { k: "显存", pct: (g) => (g.memUsed == null || !g.memTotal ? null : (g.memUsed / g.memTotal) * 100), text: (g) => (g.memUsed == null || g.memTotal == null ? null : gbTxt(g.memUsed) + " / " + gbTxt(g.memTotal) + " GB"), color: () => "#58a6ff" },
+      { k: "功耗", pct: (g) => (g.power == null || !g.powerLimit ? null : (g.power / g.powerLimit) * 100), text: (g) => (g.power == null ? null : g.power.toFixed(0) + " W"), color: () => "#d29922" },
     ],
     foot: [
-      { k: "温度", text: (g) => g.temp.toFixed(0) + "°C", color: (g) => tempColor(g.temp) },
-      { k: "风扇", text: (g) => g.fan.toFixed(0) + "%" },
-      { k: "核心频率", text: (g) => g.coreClock.toFixed(0) + " MHz" },
+      { k: "温度", text: (g) => (g.temp == null ? null : g.temp.toFixed(0) + "°C"), color: (g) => (g.temp == null ? null : tempColor(g.temp)) },
+      { k: "风扇", text: (g) => (g.fan == null ? null : g.fan.toFixed(0) + "%") },
+      { k: "核心频率", text: (g) => (g.coreClock == null ? null : g.coreClock.toFixed(0) + " MHz") },
+      { k: "驱动", text: (g) => (g.live && g.driver ? g.driver : null) },
     ],
     stats: (its) => {
-      const avg = mean(its.map((g) => g.usage));
-      const maxT = Math.max(...its.map((g) => g.temp));
+      const us = its.map((g) => g.usage).filter((v) => Number.isFinite(v));
+      const ts = its.map((g) => g.temp).filter((v) => Number.isFinite(v));
+      const ps = its.map((g) => g.power).filter((v) => Number.isFinite(v));
+      const mt = its.reduce((a, g) => a + (g.memUsed != null ? g.memUsed : 0), 0);
+      const mc = its.some((g) => g.memUsed != null && g.memTotal != null);
+      const avg = avgOf(us);
       return [
-        { k: "平均使用率", v: avg.toFixed(1), u: "%", color: usageColor(avg) },
-        { k: "最高温度", v: maxT.toFixed(0), u: "°C", color: tempColor(maxT) },
-        { k: "总功耗", v: its.reduce((a, g) => a + g.power, 0).toFixed(0), u: "W" },
-        { k: "显存", v: its.reduce((a, g) => a + g.memUsed, 0).toFixed(1) + " / " + its.reduce((a, g) => a + g.memTotal, 0), sm: true },
+        { k: "平均使用率", v: avg == null ? null : avg.toFixed(1), u: "%", color: avg == null ? null : usageColor(avg) },
+        { k: "最高温度", v: ts.length ? Math.max(...ts).toFixed(0) : null, u: "°C", color: ts.length ? tempColor(Math.max(...ts)) : null },
+        { k: "总功耗", v: ps.length ? ps.reduce((a, b) => a + b, 0).toFixed(0) : null, u: "W" },
+        { k: "显存", v: mc ? gbTxt(mt) + " / " + gbTxt(its.reduce((a, g) => a + (g.memTotal != null ? g.memTotal : 0), 0)) : null, u: "GB", sm: true },
       ];
     },
     detail: (g) => [
-      { k: "型号", v: g.name },
-      { k: "显存", v: g.memUsed.toFixed(1) + " / " + g.memTotal + " GB" },
-      { k: "功耗墙", v: g.powerLimit + " W" },
+      { k: "型号", v: g.name || null },
+      { k: "显存", v: g.memUsed == null || g.memTotal == null ? null : gbTxt(g.memUsed) + " / " + gbTxt(g.memTotal) + " GB" },
+      { k: "功耗墙", v: g.powerLimit == null ? null : g.powerLimit + " W" },
+      { k: "驱动", v: g.driver || null },
     ],
     step: (g, t, i) => {
       const w = (Math.sin(t * 0.55 + i * 1.7) + 1) / 2;
@@ -1485,11 +1704,16 @@ const RES = {
       pushHist(g.history, g.usage);
     },
     history: (g) => g.history,
-    histColor: (g) => usageColor(g.usage),
+    histColor: (g) => (g.usage == null ? "#58a6ff" : usageColor(g.usage)),
   },
 
   disk: {
     title: "磁盘 I/O", unit: "块", count: (hw) => hw.disks,
+    // 实测那台摆的是**卷**（一个挂载点一张卡），抬头就不能再写 "2 块" 了 —— 抬头是给"摆了几张"计数的，
+    // 摆的是卷就说卷、退回物理盘就说盘；模拟那台照旧走 items.length + unit。
+    sub: (its) => (its.length && its[0].live
+      ? (its[0].vol != null ? its.length + " 个卷" : its.length + " 块物理盘")
+      : its.length + " 块"),
     make: (i) => {
       const d = DISK_NAMES[i % DISK_NAMES.length];
       return Object.assign({ id: i }, d, {
@@ -1497,37 +1721,54 @@ const RES = {
         busy: 5, temp: 40, latency: 0.1, history: hist(60, 8, 15),
       });
     },
-    label: (d) => "DISK " + d.id,
-    tag: (d) => d.type,
+    // 用户第 7 条："磁盘信息也不对"。实测那台显示的是**卷**（D:\、/ 这种挂载点 + 容量 + 类型），
+    // 型号 WMI/df 给得出就写，给不出就写挂载点；没有卷的机器退回整块物理盘。
+    label: (d) => diskName(d),
+    tag: (d) => d.type || "",
     tagCls: (d) => (d.type === "NVMe" ? "p" : d.type === "HDD" ? "" : "e"),
     pct: (d) => d.busy,
-    big: (d) => [d.busy.toFixed(0), "%", usageColor(d.busy)],
+    big: (d) => (d.busy == null ? null : [d.busy.toFixed(0), "%", usageColor(d.busy)]),
+    // 读/写这两条只给模拟那台：实测只有字节/秒这一个真数，没有标称速率可当分母，
+    // 拿一个假分母去画进度条就是编。实测那台把读/写挪到下面的 foot 里，只报数、不画比例。
     bars: [
-      { k: "读", pct: (d) => (d.readSpeed / d.maxRead) * 100, text: (d) => fmtSpeed(d.readSpeed).join(" "), color: () => "#4f8cff" },
-      { k: "写", pct: (d) => (d.writeSpeed / d.maxWrite) * 100, text: (d) => fmtSpeed(d.writeSpeed).join(" "), color: () => "#6fd39a" },
-      { k: "容量", pct: (d) => (d.used / d.total) * 100, text: (d) => d.used.toFixed(0) + " / " + d.total + " GB", color: (d) => usageColor((d.used / d.total) * 100) },
+      { k: "读", pct: (d) => (d.live || !d.maxRead ? null : (d.readSpeed / d.maxRead) * 100), text: (d) => (d.live || d.readSpeed == null ? null : fmtSpeed(d.readSpeed).join(" ")), color: () => "#4f8cff" },
+      { k: "写", pct: (d) => (d.live || !d.maxWrite ? null : (d.writeSpeed / d.maxWrite) * 100), text: (d) => (d.live || d.writeSpeed == null ? null : fmtSpeed(d.writeSpeed).join(" ")), color: () => "#6fd39a" },
+      { k: "容量", pct: (d) => (d.used == null || !d.total ? null : (d.used / d.total) * 100), text: (d) => (d.used == null || d.total == null ? null : gbTxt(d.used, 0) + " / " + gbTxt(d.total, 0) + " GB"), color: (d) => { const p = d.used != null && d.total ? (d.used / d.total) * 100 : null; return p == null ? null : usageColor(p); } },
     ],
     foot: [
-      { k: "温度", text: (d) => d.temp.toFixed(0) + "°C", color: (d) => tempColor(d.temp) },
-      { k: "延迟", text: (d) => d.latency.toFixed(2) + " ms" },
-      { k: "使用率", text: (d) => d.busy.toFixed(0) + "%" },
+      { k: "读", text: (d) => (d.live && d.readSpeed != null ? fmtSpeed(d.readSpeed).join(" ") : null) },
+      { k: "写", text: (d) => (d.live && d.writeSpeed != null ? fmtSpeed(d.writeSpeed).join(" ") : null) },
+      { k: "剩余", text: (d) => (d.live && d.free != null ? gbTxt(d.free, 0) + " GB" : null) },
+      { k: "温度", text: (d) => (d.temp == null ? null : d.temp.toFixed(0) + "°C"), color: (d) => (d.temp == null ? null : tempColor(d.temp)) },
+      { k: "延迟", text: (d) => (d.latency == null ? null : d.latency.toFixed(2) + " ms") },
+      { k: "使用率", text: (d) => (!d.live && d.busy != null ? d.busy.toFixed(0) + "%" : null) },
     ],
     stats: (its) => {
-      const rd = fmtSpeed(its.reduce((a, d) => a + d.readSpeed, 0));
-      const wr = fmtSpeed(its.reduce((a, d) => a + d.writeSpeed, 0));
-      const hot = its.reduce((a, b) => (b.busy > a.busy ? b : a));
-      const maxT = Math.max(...its.map((d) => d.temp));
+      const rd = its.map((d) => d.readSpeed).filter((v) => Number.isFinite(v));
+      const wr = its.map((d) => d.writeSpeed).filter((v) => Number.isFinite(v));
+      const bu = its.map((d) => d.busy).filter((v) => Number.isFinite(v));
+      const ts = its.map((d) => d.temp).filter((v) => Number.isFinite(v));
+      const hot = bu.length ? its[its.map((d) => d.busy).indexOf(Math.max(...bu))] : null;
+      const total = rd.length || wr.length ? fmtSpeed(rd.reduce((a, b) => a + b, 0)) : null;
+      const totalW = rd.length || wr.length ? fmtSpeed(wr.reduce((a, b) => a + b, 0)) : null;
+      // 实测那台的 busy 其实是**容量占用率**（一次快照给不出 IO 忙率），叫"最忙盘"就是挂错牌子了
+      const live = !!(its[0] && its[0].live);
       return [
-        { k: "总读", v: rd[0], u: rd[1] },
-        { k: "总写", v: wr[0], u: wr[1] },
-        { k: "最忙盘", v: "DISK " + hot.id + " · " + hot.busy.toFixed(0) + "%", sm: true },
-        { k: "最热盘", v: maxT.toFixed(0), u: "°C", color: tempColor(maxT) },
+        { k: "总读", v: total ? total[0] : null, u: total ? total[1] : "" },
+        { k: "总写", v: totalW ? totalW[0] : null, u: totalW ? totalW[1] : "" },
+        { k: live ? "占用最高" : "最忙盘", v: hot ? diskName(hot) + " · " + hot.busy.toFixed(0) + "%" : null, sm: true },
+        { k: "最热盘", v: ts.length ? Math.max(...ts).toFixed(0) : null, u: "°C", color: ts.length ? tempColor(Math.max(...ts)) : null },
       ];
     },
     detail: (d) => [
-      { k: "型号", v: d.name },
-      { k: "容量", v: d.used.toFixed(0) + " / " + d.total + " GB" },
-      { k: "标称", v: "读 " + d.maxRead + " · 写 " + d.maxWrite + " MB/s" },
+      { k: "型号", v: d.name || null },
+      { k: "容量", v: d.used == null || d.total == null ? null : gbTxt(d.used, 0) + " / " + gbTxt(d.total, 0) + " GB" },
+      { k: "剩余", v: d.free == null ? null : gbTxt(d.free, 0) + " GB" },
+      { k: "挂载", v: d.live && d.vol ? d.vol : null },
+      { k: "设备", v: d.live && d.part && d.part !== d.vol ? d.part : null },
+      { k: "文件系统", v: d.live && d.fs ? d.fs : null },
+      { k: "总线", v: d.live && d.bus ? d.bus : null },
+      { k: "标称", v: !d.live && d.maxRead ? "读 " + d.maxRead + " · 写 " + d.maxWrite + " MB/s" : null },
     ],
     step: (d, t, i) => {
       const w = (Math.sin(t * 0.8 + i * 1.3) + 1) / 2;
@@ -1540,7 +1781,7 @@ const RES = {
       pushHist(d.history, d.busy);
     },
     history: (d) => d.history,
-    histColor: (d) => usageColor(d.busy),
+    histColor: (d) => (d.busy == null ? "#58a6ff" : usageColor(d.busy)),
   },
 
   net: {
@@ -1550,34 +1791,49 @@ const RES = {
       dropped: 0, errors: 0, latency: 3,
       downHistory: hist(60, 4, 6), upHistory: hist(60, 1.5, 3),
     }),
-    label: (n) => n.name,
-    tag: (n) => n.type,
-    pct: (n) => (n.downSpeed / (n.link / 8)) * 100,
-    big: (n) => fmtSpeed(n.downSpeed).concat("#4f8cff"),
+    label: (n) => n.name || null,
+    tag: (n) => n.type || "",
+    pct: (n) => (n.downSpeed == null || !n.link ? null : (n.downSpeed / (n.link / 8)) * 100),
+    big: (n) => (n.downSpeed == null ? null : fmtSpeed(n.downSpeed).concat("#4f8cff")),
     bars: [
-      { k: "↓ 下行", pct: (n) => (n.downSpeed / (n.link / 8)) * 100, text: (n) => fmtSpeed(n.downSpeed).join(" "), color: () => "#4f8cff" },
-      { k: "↑ 上行", pct: (n) => (n.upSpeed / (n.link / 8)) * 100, text: (n) => fmtSpeed(n.upSpeed).join(" "), color: () => "#6fd39a" },
+      { k: "↓ 下行", pct: (n) => (n.downSpeed == null || !n.link ? null : (n.downSpeed / (n.link / 8)) * 100), text: (n) => (n.downSpeed == null ? null : fmtSpeed(n.downSpeed).join(" ")), color: () => "#4f8cff" },
+      { k: "↑ 上行", pct: (n) => (n.upSpeed == null || !n.link ? null : (n.upSpeed / (n.link / 8)) * 100), text: (n) => (n.upSpeed == null ? null : fmtSpeed(n.upSpeed).join(" ")), color: () => "#6fd39a" },
     ],
+    // 实测那台的"累计流量 / 丢包 / 延迟"一次快照拿不到（要 /proc/net/snmp 或计数器差），
+    // 换成真的量得到的三样：链路速率、IP/MAC、当前上下行速率。
     foot: [
-      { k: "累计", text: (n) => (n.totalRx + n.totalTx).toFixed(1) + " GB" },
-      { k: "丢包", text: (n) => String(n.dropped + n.errors) },
-      { k: "延迟", text: (n) => n.latency.toFixed(1) + " ms" },
+      { k: "累计", text: (n) => (n.live ? null : (n.totalRx + n.totalTx).toFixed(1) + " GB") },
+      { k: "丢包", text: (n) => (n.live ? null : String(n.dropped + n.errors)) },
+      { k: "延迟", text: (n) => (n.live ? null : n.latency.toFixed(1) + " ms") },
+      { k: "链路", text: (n) => (!n.live || !n.link ? null : (n.link / 1000).toFixed(1) + " Gbps") },
+      { k: "地址", text: (n) => (n.live && n.ip ? n.ip : null) },
+      { k: "MAC", text: (n) => (n.live && n.mac ? n.mac : null) },
     ],
     spark: (n) => [[n.downHistory, "#4f8cff"], [n.upHistory, "#6fd39a"]],
     stats: (its) => {
-      const fd = fmtSpeed(its.reduce((a, n) => a + n.downSpeed, 0));
-      const fu = fmtSpeed(its.reduce((a, n) => a + n.upSpeed, 0));
+      const live = !!(its[0] && its[0].live);
+      const ds = its.map((n) => n.downSpeed).filter((v) => Number.isFinite(v));
+      const us = its.map((n) => n.upSpeed).filter((v) => Number.isFinite(v));
+      const fd = ds.length ? fmtSpeed(ds.reduce((a, b) => a + b, 0)) : null;
+      const fu = us.length ? fmtSpeed(us.reduce((a, b) => a + b, 0)) : null;
+      const up = its.filter((n) => n.up).length;
+      const lat = its.map((n) => n.latency).filter((v) => Number.isFinite(v));
       return [
-        { k: "总下行", v: fd[0], u: fd[1], color: "#4f8cff" },
-        { k: "总上行", v: fu[0], u: fu[1], color: "#6fd39a" },
-        { k: "在线", v: its.filter((n) => n.up).length + " / " + its.length, sm: true },
-        { k: "最高延迟", v: Math.max(...its.map((n) => n.latency)).toFixed(1), u: "ms" },
+        { k: "总下行", v: fd ? fd[0] : null, u: fd ? fd[1] : "", color: "#4f8cff" },
+        { k: "总上行", v: fu ? fu[0] : null, u: fu ? fu[1] : "", color: "#6fd39a" },
+        { k: "在线", v: up + " / " + its.length, sm: true },
+        live
+          ? { k: "链路合计", v: (its.reduce((a, n) => a + (n.link || 0), 0) / 1000).toFixed(1), u: "Gbps" }
+          : { k: "最高延迟", v: lat.length ? Math.max(...lat).toFixed(1) : null, u: "ms" },
       ];
     },
     detail: (n) => [
-      { k: "链路", v: (n.link / 1000).toFixed(1) + " Gbps" },
-      { k: "累计", v: "↓ " + n.totalRx.toFixed(1) + " · ↑ " + n.totalTx.toFixed(1) + " GB" },
-      { k: "错包", v: "丢 " + n.dropped + " · 错 " + n.errors },
+      { k: "链路", v: n.link ? (n.link / 1000).toFixed(1) + " Gbps" : null },
+      { k: "累计", v: n.live ? null : "↓ " + n.totalRx.toFixed(1) + " · ↑ " + n.totalTx.toFixed(1) + " GB" },
+      { k: "错包", v: n.live ? null : "丢 " + n.dropped + " · 错 " + n.errors },
+      { k: "地址", v: n.live && n.ip ? n.ip : null },
+      { k: "MAC", v: n.live && n.mac ? n.mac : null },
+      { k: "驱动", v: n.live && n.desc ? n.desc : null },
     ],
     step: (n, t, i) => {
       const w = (Math.sin(t * 0.6 + i * 2.1) + 1) / 2;
@@ -1634,7 +1890,7 @@ function pickedItem(key) { return picked[key] ? picked[key].item : null; }
 
 function buildCard(key, rs, item) {
   const card = el("div", "core" + (rs.dense ? "" : " wide"));
-  const tg = el("span", "ctag" + (rs.tagCls ? " " + rs.tagCls(item) : ""), rs.tag ? rs.tag(item) : "");
+  const tg = el("span", "ctag" + (rs.tagCls && rs.tagCls(item) ? " " + rs.tagCls(item) : ""), rs.tag ? rs.tag(item) || "" : "");
   const head = el("div", "chead");
   head.append(el("span", "cname", rs.label(item)), tg);
   const bigT = document.createTextNode("—");
@@ -1643,30 +1899,35 @@ function buildCard(key, rs, item) {
   bigB.append(bigT);
   const bigRow = el("div", "bigno");
   bigRow.append(bigB, bigU);
-  const bars = rs.bars.map((bd) => {
+  // 实测项里"取不到"的那一行（pct 和文字都是 null）整行不建 —— 空进度条比没有更难懂。
+  // 建完就把筛出来的定义留在 item._ 上，paintCard 按同一份定义画，两边不会错位。
+  const barDefs = rs.bars.filter((bd) => bd.pct(item) != null || bd.text(item) != null);
+  const bars = barDefs.map((bd) => {
     const i = el("i");
     const bar = el("div", "bar");
     bar.append(i);
     const v = el("span", "v");
     const row = el("div", "io");
-    row.append(el("span", "k", bd.k), bar, v);
+    row.append(el("span", "k", typeof bd.k === "function" ? bd.k(item) : bd.k), bar, v);
     card.append(row);
     return { i, bar, v };
   });
+  const footDefs = rs.foot.filter((fd) => fd.text(item) != null);
   const foot = el("div", "sub2");
-  const footRefs = rs.foot.map((fd) => {
+  const footRefs = footDefs.map((fd) => {
     const b = el("b");
     const s = el("span", null, fd.k + " ");
     s.append(b);
     foot.append(s);
     return b;
   });
+  // 实测那台没有历史（一次快照给不出曲线），spark 会返回空数组 —— 那就别建那个空盒子占位
   let sp = null;
-  if (rs.spark) { sp = el("div", "miniSpark"); card.append(sp); }
+  if (rs.spark && rs.spark(item).some(([vals]) => vals && vals.length > 1)) { sp = el("div", "miniSpark"); card.append(sp); }
   card.append(foot);
   card.prepend(head, bigRow);
   card.addEventListener("click", () => { pickCard(key, item); });
-  item._ = { card, bigT, bigU, bars, footRefs, sp, tg };
+  item._ = { card, bigT, bigU, bars, barDefs, footRefs, footDefs, sp, tg };
   return card;
 }
 
@@ -1693,7 +1954,7 @@ function buildItems(key) {
   }
 }
 
-function buildSection(key) {
+function buildSection(key, d) {
   const rs = RES[key];
   if (!views[key]) views[key] = "card";
   picked[key] = null;
@@ -1711,7 +1972,7 @@ function buildSection(key) {
     head.append(el("span", "grow"), bCard, bHeat);
   }
   const stats = el("div", "cstat");
-  const statRefs = rs.stats ? rs.stats(rs.items).map((s) => {
+  const statRefs = rs.stats ? rs.stats(rs.items, d).map((s) => {
     const t = document.createTextNode(OFF);
     const v = el("div", "v" + (s.sm ? " sm" : ""));
     v.append(t, el("span", "u", ""));
@@ -1755,30 +2016,33 @@ function paintCard(key, rs, it, on) {
   const sel = !!(pickedItem(key) === it);
   if (u.cell) {
     const p = rs.pct(it);
-    u.cell.style.background = on ? usageColor(p) : "#21262d";
-    u.cell.style.opacity = on ? (0.4 + (p / 100) * 0.6).toFixed(2) : "0.5";
+    u.cell.style.background = on && p != null ? usageColor(p) : "#21262d";
+    u.cell.style.opacity = on && p != null ? (0.4 + (p / 100) * 0.6).toFixed(2) : "0.5";
     u.cell.classList.toggle("sel", sel);
     return;
   }
   u.card.classList.toggle("sel", sel);
   u.card.style.opacity = on ? "1" : ".5";
-  const big = on ? rs.big(it) : [OFF, ""];
+  const raw = on ? rs.big(it) : null;
+  const big = raw || [OFF, ""];
   u.bigT.textContent = big[0];
   u.bigU.textContent = big[1];
   u.bigT.parentNode.style.color = on && big[2] ? big[2] : "";
-  rs.bars.forEach((bd, i) => {
+  u.barDefs.forEach((bd, i) => {
     const r = u.bars[i];
-    if (!on) { r.i.style.width = "0%"; r.v.textContent = OFF; return; }
-    r.i.style.width = clampv(bd.pct(it), 0, 100).toFixed(1) + "%";
-    r.i.style.background = bd.color ? bd.color(it) : "#58a6ff";
-    r.v.textContent = bd.text(it);
+    const p = on ? bd.pct(it) : null;
+    if (p == null) { r.i.style.width = "0%"; r.i.style.background = "transparent"; }
+    else { r.i.style.width = clampv(p, 0, 100).toFixed(1) + "%"; r.i.style.background = (bd.color && bd.color(it)) || "#58a6ff"; }
+    const tx = on ? bd.text(it) : null;
+    r.v.textContent = tx == null ? OFF : tx;
   });
-  rs.foot.forEach((fd, i) => {
+  u.footDefs.forEach((fd, i) => {
     const t = u.footRefs[i];
-    t.textContent = on ? fd.text(it) : OFF;
-    t.style.color = on && fd.color ? fd.color(it) : "";
+    const tx = on ? fd.text(it) : null;
+    t.textContent = tx == null ? OFF : tx;
+    t.style.color = on && tx != null && fd.color ? (fd.color(it) || "") : "";
   });
-  if (u.tg && rs.tagCls) u.tg.className = "ctag " + rs.tagCls(it);
+  if (u.tg && rs.tagCls) u.tg.className = "ctag" + (rs.tagCls(it) ? " " + rs.tagCls(it) : "");
   if (u.sp && rs.spark) u.sp.innerHTML = on ? rs.spark(it).map(([v, c]) => sparkSvg(v, c, 26)).join("") : "";
 }
 
@@ -1786,10 +2050,13 @@ function paintDetail(key, rs, on) {
   const d = rs.ui.detail;
   const sel = pickedItem(key);
   if (!sel || !on) { d.hidden = true; d.textContent = ""; return; }
-  const rows = rs.detail ? rs.detail(sel) : [];
+  // 取不到的字段不摆一行"—"：那一行直接不出现，留下的都是这一台真报上来的
+  const rows = (rs.detail ? rs.detail(sel) : []).filter((r) => r.v != null);
   const ths = rs.threads ? rs.threads(sel) : [];
+  const wave = sparkSvg(rs.history(sel) || [], rs.histColor(sel), 42);
+  if (!wave && !rows.length && !ths.length) { d.hidden = true; d.textContent = ""; return; }
   d.hidden = false;
-  d.innerHTML = sparkSvg(rs.history(sel), rs.histColor(sel), 42)
+  d.innerHTML = wave
     + rows.map((r) => '<div class="drow"><span>' + r.k + "</span><b" + (r.color ? ' style="color:' + r.color + '"' : "") + ">" + r.v + "</b></div>").join("")
     + ths.map((t) => '<div class="thr"><span>' + t.k + '</span><div class="bar"><i style="width:'
       + clampv(t.pct, 0, 100).toFixed(1) + "%;background:" + t.color + '"></i></div><span class="tv">' + t.text + "</span></div>").join("");
@@ -1803,29 +2070,31 @@ function paintPanel(advance) {
   for (const key of PANEL_ORDER) {
     const rs = RES[key];
     if (!rs.items.length) continue;   // 这台没这个概念（交换机没有 CPU/内存/磁盘）→ 这节压根没建
-    if (advance && on && !perfPaused) rs.items.forEach((it, i) => rs.step(it, t, i));
-    rs.ui.cnt.textContent = rs.sub ? rs.sub(rs.items) : rs.items.length + " " + rs.unit;
+    // 实测那台的数来自探针那一帧，不是本地游走：its 上带 live 的就别 step，否则真数会被假数盖掉。
+    if (advance && on && !perfPaused) rs.items.forEach((it, i) => { if (!it.live) rs.step(it, t, i); });
+    rs.ui.cnt.textContent = rs.sub ? rs.sub(rs.items, perfDev) : rs.items.length + " " + rs.unit;
     const tag2 = srcOf(key, perfDev);
     rs.ui.src.textContent = tag2.t;
     rs.ui.src.className = "chip " + tag2.c;
     if (rs.stats) {
-      const st = on ? rs.stats(rs.items) : [];
+      const st = on ? rs.stats(rs.items, perfDev) : [];
       if (on && rs.real) rs.real(st, perfDev);
       rs.ui.statRefs.forEach((ref, i) => {
         const s = st[i];
-        ref.t.textContent = s ? s.v : OFF;
-        ref.u.textContent = s ? s.u || "" : "";
-        ref.v.style.color = s && s.color ? s.color : "";
+        const has = !!(s && s.v != null && s.v !== "");
+        ref.t.textContent = has ? s.v : OFF;
+        ref.u.textContent = has ? s.u || "" : "";
+        ref.v.style.color = has && s.color ? s.color : "";
       });
     }
     for (const it of rs.items) paintCard(key, rs, it, on);
     if (rs.summary) {
       const r = rs.ui.sumRefs;
-      if (!on) { for (const k in r) r[k].textContent = k === "maxCore" ? "" : OFF; }
+      const us = rs.items.map((it) => rs.pct(it)).filter((v) => Number.isFinite(v));
+      if (!on || !us.length) { for (const k in r) r[k].textContent = k === "maxCore" ? "" : OFF; }
       else {
-        const us = rs.items.map((it) => rs.pct(it));
         const avg = mean(us), max = Math.max(...us), min = Math.min(...us);
-        const hot = rs.items[us.indexOf(max)];
+        const hot = rs.items[rs.items.findIndex((it) => rs.pct(it) === max)];
         const sd = Math.sqrt(mean(us.map((v) => (v - avg) ** 2)));
         r.avg.textContent = avg.toFixed(1);
         r.max.textContent = max.toFixed(0);
@@ -1847,7 +2116,8 @@ function panelKeys(d) {
 }
 function panelSig(d) {
   const hw = hwOf(d);
-  return panelKeys(d).join(",") + "|" + [hw.cores, hw.gpus, hw.disks, hw.nics, hw.mem].join(",");
+  // 帧的时间戳也算进签名：同一台机器前后两帧里卷/网卡的条数会变，签名变了才会重做面板。
+  return panelKeys(d).join(",") + "|" + [hw.cores, hw.gpus, hw.disks, hw.nics, hw.mem].join(",") + "|" + (d.frame ? d.frame.at : "-");
 }
 let panelSigNow = "";
 
@@ -1855,12 +2125,22 @@ function buildPanel(d) {
   perfName.textContent = d.short;
   perfBody.textContent = "";
   const hw = hwOf(d);
+  const frame = liveOf(d) && d.frame ? d.frame : null;
   panelSigNow = panelSig(d);
+  let built = 0;
   for (const key of PANEL_ORDER) {
     const rs = RES[key];
-    rs.items = Array.from({ length: rs.count(hw) }, (_, i) => rs.make(i, hw));
+    rs.items = frame ? LIVE[key](frame) : Array.from({ length: rs.count(hw) }, (_, i) => rs.make(i, hw));
     if (!rs.items.length) { rs.ui = null; continue; }   // 这节不建，也别留下一次的旧 DOM 引用
-    perfBody.append(buildSection(key));
+    perfBody.append(buildSection(key, d));
+    built++;
+  }
+  // 一节都没建起来 —— 面板不能是一片空白，得说清楚是"没填地址"还是"还没抓到帧"
+  if (!built) {
+    perfBody.append(el("div", "pnote", !liveOf(d)
+      ? "这台没填地址：只摆位置，不抓数"
+      : d.probeErr ? "这台抓不到：" + d.probeErr
+        : "还没抓到这台的帧（小窗里把采集频率调成秒数就开始抓）"));
   }
 }
 
@@ -2347,6 +2627,7 @@ const loads = new Map();   // device.id -> { pct, key }
 const realLoadOf = (d) => framePct(d.frame);
 function stepLoads(t) {
   for (const d of devices) {
+    if (d.hidden || zoneOffOf(d)) continue;   // 屏幕上没有它 → 不用替它算分级
     let w = loads.get(d.id);
     if (!w) { w = { pct: 10 + Math.random() * 45, k: Math.random() * 6.283, key: null }; loads.set(d.id, w); }
     const real = realLoadOf(d);
@@ -2593,7 +2874,7 @@ function renderList() {
   }
   mine.forEach((o, k) => {
     const d = o.d, i = o.i;
-    const det = el("details", "dev");
+    const det = el("details", "dev" + (d.hidden ? " hid" : ""));
     det.open = openId === d.id;
 
     const sum = el("summary");
@@ -2608,13 +2889,19 @@ function renderList() {
       + "一排八台的画面里用鼠标点 3D 基本点不中，所以列表里给一个直达的）");
     const up = mini("↑", "上移（左移一位）");
     const dn = mini("↓", "下移（右移一位）");
+    // 整个分区的开关：关掉 = 这一区不摆，设备留在清单里、随时放回来（和"删除"是两回事）
+    const hideBtn = mini(d.hidden ? "放回" : "收起", d.hidden
+      ? "放回屏幕上（收起只是不摆，清单里一直留着）"
+      : "从屏幕上收起来：3D 里不摆、列表里不占格、也不再去抓它的帧。清单里留着，随时放回", d.hidden ? "on2" : "");
     const del = mini("删除", "把这台的 3D 移掉", "del");
-    up.disabled = k === 0;
-    dn.disabled = k === mine.length - 1;
+    // 收起来的这台不参与排序（屏幕上看不见，换位看不出来），按钮就按不可用来摆
+    up.disabled = k === 0 || d.hidden;
+    dn.disabled = k === mine.length - 1 || d.hidden;
     // summary 里的按钮要拦住默认行为，否则点一下反而把这台展开了
     loc.addEventListener("click", (e) => { e.preventDefault(); const h = holderOf(d); if (h) focusStation(h); });
     up.addEventListener("click", (e) => { e.preventDefault(); moveInZone(i, -1); });
     dn.addEventListener("click", (e) => { e.preventDefault(); moveInZone(i, 1); });
+    hideBtn.addEventListener("click", (e) => { e.preventDefault(); d.hidden = !d.hidden; sync(); touch(); });
     del.addEventListener("click", (e) => {
       e.preventDefault();
       if (openId === d.id) openId = null;
@@ -2622,8 +2909,10 @@ function renderList() {
       sync();
       touch();
     });
-    ops.append(loc, up, dn, del);
-    sum.append(el("span", "caret"), sumName, tierChip, zoneChip, pwChip, addrChip, el("span", "grow"), ops);
+    ops.append(loc, up, dn, hideBtn, del);
+    sum.append(el("span", "caret"), sumName, tierChip, zoneChip, pwChip, addrChip);
+    if (d.hidden) sum.append(el("span", "chip", "已收起"));
+    sum.append(el("span", "grow"), ops);
 
     const body = el("div", "dbody");
     const nm = textField("text", d.short, "设备名", (v) => {
@@ -2728,8 +3017,11 @@ function renderList() {
     rowsBox.append(det);
   });
   for (const d of devices) applyState(d);
-  const zn = (ZONES.find((z) => z.key === curZone) || ZONES[0]).cn;
-  countEl.textContent = zn + " " + mine.length + " 台 · 全部 " + devices.length + " 台";
+  const zcur = ZONES.find((z) => z.key === curZone) || ZONES[0];
+  const shown = zcur.off ? 0 : mine.filter((o) => !o.d.hidden).length;
+  const tail = zcur.off ? "（这一区已关，整区不摆）"
+    : mine.length > shown ? "（收起 " + (mine.length - shown) + " 台）" : "";
+  countEl.textContent = zcur.cn + " " + shown + " 台" + tail + " · 全部 " + devices.length + " 台";
 }
 
 // ↑↓ 只跟"同一个区里的邻居"换位：区各摆各的，跨区换位在屏幕上一点变化都看不出来，
@@ -2738,6 +3030,7 @@ function moveInZone(i, dir) {
   const zk = zoneKeyOf(devices[i]);
   for (let j = i + dir; j >= 0 && j < devices.length; j += dir) {
     if (zoneKeyOf(devices[j]) !== zk) continue;
+    if (devices[j].hidden) continue;   // 收起来的那台屏幕上看不见，跟它换位等于按钮没反应
     const t = devices[i]; devices[i] = devices[j]; devices[j] = t;
     sync();
     return;
@@ -2746,7 +3039,8 @@ function moveInZone(i, dir) {
 
 // 列表动一处，场景重造一遍：改档 / 加台 / 删台 / 换区 / 排序都会走到这里
 function sync() {
-  if (perfDev && !devices.includes(perfDev)) hidePerf();
+  // 收起来的、整个分区关掉的，看板不该继续挂在上面（场景里已经没有它了）
+  if (perfDev && (!devices.includes(perfDev) || perfDev.hidden || zoneOffOf(perfDev))) hidePerf();
   rebuild();
   renderTabs();
   renderList();
@@ -3047,7 +3341,8 @@ function setCfgLine() {
     : "没连上本地文件（现在是 file:// 打开？）：编辑只在内存里，刷新即丢。要落盘请跑 node serve.mjs，再开 http://127.0.0.1:8123/（换成这台机子的 IP 也行，跑服务时带 HM_BIND=0.0.0.0）";
 }
 function toFileList() {
-  return devices.map((d) => ({ name: d.short, tier: d.tier, zone: d.zone, power: d.power, os: d.os,
+  return devices.map((d) => ({ name: d.short, tier: d.tier, zone: d.zone, power: d.power,
+    hidden: d.hidden === true, os: d.os,
     host: d.host, user: d.user, pass: d.pass }));
 }
 async function saveNow() {
@@ -3084,7 +3379,7 @@ async function loadDevices() {
     if (!Array.isArray(j.list) || !j.list.length) throw new Error("清单为空");
     devices = j.list.map((it) => Object.assign(
       mkDev(String(it.name || "(未命名)"), TIERS.some((t) => t.key === it.tier) ? it.tier : "matx"),
-      { power: it.power !== false, os: it.os === "linux" ? "linux" : "win",
+      { power: it.power !== false, hidden: it.hidden === true, os: it.os === "linux" ? "linux" : "win",
         host: typeof it.host === "string" ? it.host : "", user: typeof it.user === "string" ? it.user : "",
         pass: typeof it.pass === "string" ? it.pass : "",
         zone: ZONES.some((z) => z.key === it.zone) ? it.zone : "" }
@@ -3115,7 +3410,7 @@ function setZLine() {
     ? "分区表已接到本地文件 " + ZONE_FILE + "（改一次才生成）· 改名 / 挪位 / 增删即写回"
     : "没连上本地文件（现在是 file:// 打开？）：分区改动只在内存里，刷新即丢。要落盘请跑 node serve.mjs，再开 http://127.0.0.1:8123/（换成这台机子的 IP 也行，跑服务时带 HM_BIND=0.0.0.0）";
 }
-const zonesToFile = () => ZONES.map((z) => ({ key: z.key, cn: z.cn, at: z.at }));
+const zonesToFile = () => ZONES.map((z) => ({ key: z.key, cn: z.cn, at: z.at, off: z.off === true }));
 async function saveZones() {
   try {
     const r = await fetch(ZONE_API, { method: "PUT", headers: { "content-type": "application/json" },
@@ -3144,7 +3439,7 @@ function zonesFromFile(list) {
     if (!ZONE_KEY_RE.test(key) || seen.has(key) || !Number.isFinite(x) || !Number.isFinite(z)) continue;
     seen.add(key);
     out.push({ key, cn: String(it.cn || "").slice(0, 12) || ("分区 " + (out.length + 1)),
-      at: [Math.round(x), Math.round(z)] });
+      at: [Math.round(x), Math.round(z)], off: it.off === true });
   }
   return out.length ? out : null;
 }
@@ -3168,11 +3463,12 @@ function renderTabs() {
   tabsBox.textContent = "";
   if (!ZONES.some((z) => z.key === curZone)) curZone = ZONES[0].key;
   for (const z of ZONES) {
-    const n = devices.filter((d) => zoneKeyOf(d) === z.key).length;
-    const b = el("button", "zt" + (z.key === curZone ? " on" : ""));
+    const all = devices.filter((d) => zoneKeyOf(d) === z.key).length;
+    const vis = z.off ? 0 : devices.filter((d) => zoneKeyOf(d) === z.key && !d.hidden).length;
+    const b = el("button", "zt" + (z.key === curZone ? " on" : "") + (z.off ? " zoff" : ""));
     b.type = "button";
-    b.title = z.cn + " · " + n + " 台（只筛列表，不动场景）";
-    b.append(el("span", null, z.cn), el("span", "zn", String(n)));
+    b.title = z.cn + " · " + vis + " 台" + (all !== vis ? "（这个区共 " + all + " 台，" + (z.off ? "整区已关" : "藏了 " + (all - vis) + " 台") + "）" : "") + "（只筛列表，不动场景）";
+    b.append(el("span", null, z.cn), el("span", "zn", String(vis)));
     b.addEventListener("click", () => {
       curZone = z.key;
       renderTabs();
@@ -3188,16 +3484,25 @@ function renderZones() {
   zRowsBox.textContent = "";
   const hd = el("div", "zrow hd");
   hd.append(el("span", null, "分区名"), el("span", null, "X（mm）"), el("span", null, "Z（mm）"),
-    el("span"), el("span"));
+    el("span", null, "开·关"), el("span"), el("span"));
   zRowsBox.append(hd);
   ZONES.forEach((z, idx) => {
-    const row = el("div", "zrow");
+    const row = el("div", "zrow" + (z.off ? " off" : ""));
     const nm = textField("text", z.cn, "分区名", (v) => {
       z.cn = v.trim() || "(未命名)";
       sync();   // 场上的区名标注、列表里的分区下拉、选项卡都跟着改
     });
     nm.maxLength = 12;
     nm.title = "分区名（显示名；设备的归属跟着 key 走，改名不动归属）";
+    // 分区可整体关闭：关掉 = 这一区整个不摆（角铁、设备、标注全撤），设备清单一条都不动。
+    // 跟"删除"是两件事：删除会把钉在里面的设备打回自动落区，关闭只是先收起这块地。
+    const sw = mini(z.off ? "已关" : "开着", "关掉 = 这个区整个不摆（设备仍在清单里）；再点一下放出来", z.off ? "on2" : "");
+    sw.addEventListener("click", () => {
+      z.off = !z.off;
+      renderZones();
+      sync();
+      touchZones();
+    });
     const loc = mini("◎", "把相机拉到这个分区上方（挪完位置想看效果就点它）");
     loc.addEventListener("click", () => {
       pinLabel(null); hidePerf();
@@ -3218,7 +3523,7 @@ function renderZones() {
       touchZones();
     });
     row.append(nm, numField(z, 0, "分区中心的 X（世界单位 = 毫米，向右为正）"),
-      numField(z, 1, "分区中心的 Z（毫米，朝屏幕前方为正）"), loc, del);
+      numField(z, 1, "分区中心的 Z（毫米，朝屏幕前方为正）"), sw, loc, del);
     zRowsBox.append(row);
   });
   zCountEl.textContent = ZONES.length + " 个分区";
