@@ -25,12 +25,14 @@
     background: rgba(4,7,11,.66); }
   /* 作者写的 display:grid 会盖掉 UA 的 [hidden]{display:none}，不补这行弹窗永远挡在画面上 */
   #mask[hidden] { display: none; }
-  #dlg { width: min(660px, calc(100vw - 32px)); max-height: calc(100vh - 64px); display: flex;
+  /* 定高不定内容：切分类时四块面板内容长短差很多，用 max-height 的话弹窗会跟着来回放大缩小。
+     高度写死后由 .db 吃掉剩余空间（flex:1 + min-height:0），面板自己 overflow-y 滚动。 */
+  #dlg { width: min(660px, calc(100vw - 32px)); height: min(700px, calc(100vh - 48px)); display: flex;
     flex-direction: column; background: #161b22; border: 1px solid #30363d; border-radius: 10px;
     box-shadow: 0 18px 48px rgba(1,4,9,.6); }
   #dlg .dh { display: flex; align-items: center; gap: 10px; padding: 10px 12px; flex: none;
     border-bottom: 1px solid #30363d; font-size: 13px; font-weight: 600; color: #e6edf3; }
-  #dlg .db { display: flex; min-height: 0; }
+  #dlg .db { display: flex; flex: 1; min-height: 0; }
   #dlg .rail { flex: none; width: 122px; padding: 8px 0; border-right: 1px solid #21262d;
     overflow-y: auto; }
   #dlg .rail button { display: block; width: 100%; text-align: left; border: 0; border-radius: 0;
@@ -39,6 +41,7 @@
   #dlg .pane { display: none; flex: 1; min-width: 0; padding: 10px 12px 12px; overflow-y: auto; }
   #dlg .pane.on { display: block; }
   #dlg .ph { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  #dlg .ph.ph-gap { margin-top: 16px; }
   #dlg .ph b { font-size: 12px; color: #e6edf3; font-weight: 600; }
   #dlg .cnt { font-size: 11px; color: #8b949e; }
   .fine { margin: 10px 0 0; font-size: 11px; opacity: .6; line-height: 1.5; }
@@ -242,13 +245,15 @@
 <div id="mask" hidden>
   <div id="dlg" role="dialog" aria-modal="true" aria-labelledby="dlgt">
     <div class="dh"><span id="dlgt">设置</span><span class="grow"></span>
+      <span id="setline" class="netnote">设置来源：读取中…</span>
       <button id="dlgx" class="mini" aria-label="关闭设置">✕ 关闭</button></div>
     <div class="db">
       <nav class="rail" aria-label="设置分类">
         <button class="cat on" data-cat="dev" type="button">设备设置</button>
         <button class="cat" data-cat="zone" type="button">分区设置</button>
         <button class="cat" data-cat="pulse" type="button">脉冲效果</button>
-        <button class="cat" data-cat="mon" type="button">性能监控</button>
+        <button class="cat" data-cat="ground" type="button">地面与雨</button>
+        <button class="cat" data-cat="mon" type="button">采集频率</button>
       </nav>
       <section class="pane on" id="cat-dev">
         <div class="ph"><b>设备列表</b><span class="cnt" id="dcount"></span><span class="grow"></span>
@@ -272,21 +277,39 @@
            分区表存在同目录的 分区.json 里（与 设备清单.json 分开，改一个不覆盖另一个）。</p>
       </section>
       <section class="pane" id="cat-pulse">
-        <div class="ph"><b>脉冲效果</b><span class="cnt">脚下那圈粒子</span></div>
+        <div class="ph"><b>脉冲效果</b><span class="cnt">脚下那圈粒子</span><span class="grow"></span>
+          <button id="pulseOn" class="mini pw on" type="button" aria-pressed="true">脉冲 开</button></div>
         <div id="pulseRows"></div>
-        <p class="fine">四格都是实时生效（正在飞的下一帧就变），值存在浏览器 localStorage，刷新还在。
+        <p class="fine">「脉冲 开／关」是总开关：关掉的那一刻还在飞的粒子一起清掉，屏幕上立刻干净，
+           再打开会重新错开相位发（不会补一轮齐发）。开关和下面四格都是实时生效，
+           值写回同目录 设置.json（没起本地服务时退回落浏览器 localStorage，见标题那行）。
            脉冲只从"开机"的设备脚下发出；颜色与节奏由分级决定：空闲＝绿·3.0s·单发，
            活跃＝黄·2.0s·双发，高负载＝红·1.2s·三连发（阈值见 docs/尺寸与实测.md 第八节，要改说一声）。
            参考里那层 UnrealBloom 辉光没带过来 —— 派单禁止引 three 的 examples/，
            所以这里的光晕只靠贴图柔光＋叠加混合，比参考暗一档是预期。</p>
       </section>
+      <section class="pane" id="cat-ground">
+        <div class="ph"><b>地面涟漪</b><span class="cnt">点阵地面被脉冲激起的环</span><span class="grow"></span>
+          <button id="rippleOn" class="mini pw on" type="button" aria-pressed="true">涟漪 开</button></div>
+        <div id="rippleRows"></div>
+        <div class="ph ph-gap"><b>二进制雨</b><span class="cnt">背景那圈下落的 0/1</span><span class="grow"></span>
+          <button id="rainOn" class="mini pw on" type="button" aria-pressed="true">雨 开</button></div>
+        <div id="rainRows"></div>
+        <p class="fine">地面是一张 3.2 万点的点阵（181×181，替掉了原来的网格线），平静时暗蓝待机；每次脉冲爆发
+           从设备脚下激起一圈涟漪向外荡，环与环会互相穿过叠加。涟漪和雨各有自己的开关，
+           跟"脉冲 开/关"互不牵连：脉冲关了脚下安静，地面和雨照旧荡。
+           二进制雨布在地图外围一圈圆柱壳上（不是参考里那面单侧幕布 —— 我们是轨道相机，
+           转到哪一面它都该是背景）。参考页那层 UnrealBloom 辉光没带（派单禁 three/examples/），
+           比参考暗一档是预期。五格滑杆与两颗开关都实时生效，值同脉冲一起写回 设置.json 的 ground 那一组。</p>
+      </section>
       <section class="pane" id="cat-mon">
-        <div class="ph"><b>性能监控</b><span class="cnt">采集频率</span></div>
+        <div class="ph"><b>采集频率</b><span class="cnt">看板与脉冲分级共用的节拍</span></div>
         <div id="monRows"></div>
         <p class="fine">这个节拍驱动两处：右侧看板的数值推进，和每台设备"负载 → 脉冲分级"的判定，
            两者同一个定时器，不会出现面板已更新、脚下还是旧状态。
-           SSH 那一帧不走这个节拍（一次快照要跑几秒，按 800ms 去戳真机是虐待），
-           仍是点"连通性测试"或双击聚焦时抓一次。</p>
+           SSH 那一帧不走这个节拍（一次快照要跑几秒，按这个节拍去戳真机是虐待），
+           仍是点"连通性测试"或双击聚焦时抓一次。
+           这一格改的是 设置.json 里 monitor.intervalMs；部署成看板后改那个文件，页面几秒后自己跟上。</p>
       </section>
     </div>
   </div>
@@ -824,14 +847,15 @@ const ZONE_FIELD = { w: 4400, d: 3200, h: 1150 };
 const ZONE_AISLE = 900;   // 两个盒子之间的过道
 const ZONE_PITCH = ZONE_FIELD.d + ZONE_AISLE;   // 一排到下一排：挪一个数，整张图的推导跟着走
 const ZC = [(ZONE_FIELD.w + ZONE_AISLE) / 2, (ZONE_FIELD.d + ZONE_AISLE) / 2];
-// 默认摆位（2026-09-23 按你指的方位重排）：算力不动；储存换到原终端那格；网络挪到原储存/原网络
-// 的中间；终端再往前（+Z，朝观众那一侧）一整个间距，落在中间那排的正前方。
+// 默认摆位（2026-09-23 第二次重排：以网络设备区为地图中心）：网络落在原点 (0,0)，
+// 其余三区整体后移一个 ZC[1]（= 半个 Z 间距）—— 相对方位与上一版完全一样，只是把整张图
+// 平移到"网络区在正中"。于是算力/储存在后排（z = −ZONE_PITCH）左右分开，终端在前排正前方。
 // 全是"默认值"不是"定案值"——分区设置里改一个数就能挪，改完存 分区.json。
 const ZONES = [
-  { key: "compute", cn: "算力集群",   at: [-ZC[0], -ZC[1]] },
-  { key: "storage", cn: "储存设备区", at: [ ZC[0], -ZC[1]] },
-  { key: "net",     cn: "网络设备区", at: [ 0,      ZC[1]] },
-  { key: "edge",    cn: "终端设备区", at: [ 0, ZC[1] + ZONE_PITCH] },
+  { key: "compute", cn: "算力集群",   at: [-ZC[0], -ZONE_PITCH] },
+  { key: "storage", cn: "储存设备区", at: [ ZC[0], -ZONE_PITCH] },
+  { key: "net",     cn: "网络设备区", at: [ 0,      0] },
+  { key: "edge",    cn: "终端设备区", at: [ 0, ZONE_PITCH] },
 ];
 const ZONE_KEY_RE = /^[a-z0-9_-]{1,24}$/;
 const ZONE_MAX = 9;   // 地皮是 3 列 × 5 行候选位，9 个到顶：再多就不是"分区"是"撒豆子"了
@@ -961,9 +985,8 @@ scene.add(keyLight);
 const fillLight = new THREE.DirectionalLight(0x8fb4ff, 0.45);
 fillLight.position.set(-2400, 900, -1800);
 scene.add(fillLight);
-const grid = new THREE.GridHelper(24000, 96, 0x2c343e, 0x1a1f26);
-grid.position.y = -1;
-scene.add(grid);
+// 地面不再是 GridHelper：2026-09-23 起由点阵涟漪地形担任（见"地面"一节，24000 mm 见方同一张地），
+// 任务书原话就是"替换掉现有的 GridHelper"。两层地面叠在一起只会互相抢读法。
 
 function fmt(v) { const r = Math.round(v * 10) / 10; return Number.isInteger(r) ? String(r) : r.toFixed(1); }
 
@@ -1120,23 +1143,36 @@ function paintZoneColors() {
 }
 
 // ---------- 有凭据的设备走 SSH 抓一帧，没有的继续用模拟数据 ----------
-// 判据只有一条：地址 + 用户名 + 密码 三格都填了才算"可采"。缺任何一个 → 模拟。
-// 三格（含明文密码）都落进同目录 设备清单.json，见 docs/本地服务与数据源.md §七。
+// 判据：地址 + 用户名 填了就算"可采"，密码可以是空的 —— 办公那几台 Windows 就是"账号 user、不设密码"，
+// 空口令是它们的正常配置。linux 那边口令不对的话，抓帧会如实报失败（屏上标"抓不到"），不会假装成功。
+// 这几格（含明文密码）都落进同目录 设备清单.json，见 docs/本地服务与数据源.md §七。
+// 抓法分两套（linux 一条 sh / win 一条 base64 的 PowerShell），由这一格的"系统"决定，见 serve.mjs。
 const tipEl = document.getElementById("tip");
-const liveOf = (d) => !!(d.host && d.user && d.pass);
+const liveOf = (d) => !!(d.host && d.user);
 const srcTag = (d) => (!liveOf(d) ? "模拟" : d.frame ? "实测" : d.probeErr ? "抓不到" : "待抓");
 
 // 每一节自己标：这节的数从哪儿来。SSH 一帧给不了速率，所以磁盘 / 网络即便抓到了也仍标"模拟"
 function srcOf(key, d) {
   if (!liveOf(d)) return { t: "模拟", c: "sim" };
   if (!d.frame) return { t: d.probeErr ? "抓不到，仍模拟" : "待抓，仍模拟", c: "bad" };
-  if (key === "cpu") return { t: "负载/核数 实测 · 分布分摊", c: "real" };
+  if (key === "cpu") return { t: "整机占用 实测 · 分布分摊", c: "real" };
   if (key === "mem") return { t: "容量 实测", c: "real" };
   if (key === "gpu") return d.frame.gpu ? { t: "一帧实测", c: "real" } : { t: "未抓到 GPU", c: "bad" };
   return { t: "模拟（快照无速率）", c: "sim" };
 }
 
-// 一帧 SSH 快照能给的：主机名 / 系统 / 核数 / 负载 / 内存总量与已用 / 磁盘容量 / 有没有卡。
+// 一帧快照给出的"这台有多忙"（0~100）：
+//   Windows 直接给占用率百分比（CIM 的 LoadPercentage）；
+//   linux 给的是 1 分钟负载均值，按 负载 ÷ 核数 × 100 折成占用率。
+// 看板上的总使用率、脚下游走分级，凡是"这台忙不忙"的地方都走这一个函数，别各算各的。
+const framePct = (f) => {
+  if (!f) return null;
+  if (typeof f.cpuPct === "number") return clampv(f.cpuPct, 0, 100);
+  if (f.cores > 0 && typeof f.load1 === "number") return clampv((f.load1 / f.cores) * 100, 0, 100);
+  return null;
+};
+
+// 一帧快照能给的：主机名 / 系统 / 核数 / 负载 / 内存总量与已用 / 磁盘容量 / 有没有卡。
 // 给不了的：各核分布、频率、温度、磁盘与网络的读写速率——这些仍然是模拟值，界面上标出来。
 function hwOf(d) {
   const base = TIER_HW[d.tier] || TIER_HW.matx;
@@ -1153,7 +1189,7 @@ function hwOf(d) {
 async function probeDevice(d) {
   try {
     const r = await fetch("/api/probe", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ host: d.host, user: d.user, pass: d.pass }) });
+      body: JSON.stringify({ host: d.host, user: d.user, pass: d.pass, os: d.os }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
     d.frame = j.frame;
@@ -1164,6 +1200,21 @@ async function probeDevice(d) {
     d.probeErr = e.message || String(e);
     return { ok: false, error: d.probeErr };
   }
+}
+// 开机各抓一帧：清单里填了地址的机器，打开页面时按顺序各抓一帧（每台隔 1.2 s，别同一瞬间捅四台）。
+// 只抓这一次 —— 之后还想再要真数据，就在那台的"连通性测试"上点一下。
+// 为什么不按采集频率自动轮询：Windows 那几台抓一帧要现起一个 PowerShell（实测 1.8~5.4 s），
+// 3 秒一轮等于让它们连轴转地开进程 —— 那是把同事的机器当监控对象使唤，不是这个原型干的事。
+// 抓不到的不影响别的：那台继续走模拟数据，屏上标"抓不到"。
+async function bootProbe() {
+  for (const d of devices) {
+    if (!liveOf(d)) continue;
+    await probeDevice(d);
+    paintZoneColors();
+    paintPanel(true);
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+  sync();
 }
 function showTip(html) {
   tipEl.innerHTML = html;
@@ -1181,11 +1232,15 @@ function tipResult(d, res) {
       + '<div class="fine">这台继续保持模拟数据。凭据存在本目录的设备清单.json（明文），本服务不写日志、不回显。</div>');
   } else {
     const f = res.frame;
+    const pct = framePct(f);
     const rows = [
       ["主机名", f.hostname, true],
       ["系统", f.os || "未报", !!f.os],
       ["核心数", f.cores ? f.cores + " 核" : "未报", !!f.cores],
-      ["1 分钟负载", f.load1 ? f.load1.toFixed(2) : "未报", !!f.load1],
+      // 两种系统给的不是同一种数：Windows 报占用率百分比，linux 报的才是负载均值 —— 别混着标
+      typeof f.cpuPct === "number"
+        ? ["CPU 占用", pct == null ? "未报" : pct.toFixed(0) + "%", pct != null]
+        : ["1 分钟负载", f.load1 ? f.load1.toFixed(2) : "未报", !!f.load1],
       ["内存", f.memTotalMb ? (f.memUsedMb / 1024).toFixed(1) + " / " + (f.memTotalMb / 1024).toFixed(1) + " GB" : "未报", !!f.memTotalMb],
       ["磁盘（根分区）", f.diskTotalBytes ? (f.diskUsedBytes / f.diskTotalBytes * 100).toFixed(0) + "% 已用" : "未报", !!f.diskTotalBytes],
       ["GPU", f.gpu ? f.gpu.util + "% · 显存 " + f.gpu.memUsedMb + "/" + f.gpu.memTotalMb + " MB · " + f.gpu.temp + "°C" : "未抓到 nvidia-smi", !!f.gpu],
@@ -1202,8 +1257,9 @@ function tipResult(d, res) {
 // ===== 性能看板：一张配置表 + 一个通用渲染器 =====
 // 五个资源（CPU / 内存 / 显卡 / 磁盘 / 网络）全部走同一份 RES 配置和同一套渲染：
 // 加一个资源 = 往 RES 添一条 + 放进 PANEL_ORDER，不再各写一遍 DOM。
-// 数值/节奏照用户给的"系统监控面板"参考（P/E 核、频率跟负载、温度更慢、突发、800ms 一拍、
+// 数值/节奏照用户给的"系统监控面板"参考（P/E 核、频率跟负载、温度更慢、突发、一拍一次、
 // 使用率绿→红 / 温度青→红两套色阶），但数值全是本地随机游走，没接任何真实指标。
+// 一拍多长由"采集频率"那格决定（默认 3 s）。
 const clampv = (v, a, b) => Math.min(b, Math.max(a, v));
 const usageColor = (p) => "hsl(" + Math.round(145 - (p / 100) * 145) + " 72% 50%)";
 const tempColor = (t) => "hsl(" + Math.round(195 - clampv((t - 40) / 50, 0, 1) * 195) + " 80% 55%)";
@@ -1291,11 +1347,10 @@ const RES = {
         { k: "最忙核心", v: "Core " + hot.id + " · " + hot.usage.toFixed(0) + "%", sm: true },
       ];
     },
-    // 抓到的那一帧只覆盖总使用率（1 分钟负载 / 核数）；各核分布仍是分摊出来的
+    // 抓到的那一帧只覆盖总使用率（win 用占用率、linux 用负载均值÷核数）；各核分布仍是分摊出来的
     real: (st, d) => {
-      const f = d.frame;
-      if (!f || !f.cores) return;
-      const pct = clampv((f.load1 / f.cores) * 100, 0, 100);
+      const pct = framePct(d.frame);
+      if (pct == null) return;
       st[0].v = pct.toFixed(1);
       st[0].color = usageColor(pct);
     },
@@ -1785,7 +1840,7 @@ function paintPanel(advance) {
 
 // 一台机器"该建哪几节"由硬件数决定：填 0 的那节不建（交换机没有 CPU / 内存 / 磁盘，
 // 路由器没有磁盘 / 显卡，NAS 没有显卡）。用签名比对决定要不要重建，
-// 免得每 800ms 把整块面板重做一遍 —— 那会把用户点开的卡片选中态冲掉。
+// 免得每一拍都把整块面板重做一遍 —— 那会把用户点开的卡片选中态冲掉。
 function panelKeys(d) {
   const hw = hwOf(d);
   return PANEL_ORDER.filter((k) => RES[k].count(hw) > 0);
@@ -1864,17 +1919,17 @@ perfGrip.addEventListener("pointerdown", (e) => {
   window.addEventListener("pointerup", done);
 });
 
-// ---------- 采集节拍：性能监控设置里那一格改的就是它 ----------
+// ---------- 采集节拍：设置里"采集频率"那一格改的就是它 ----------
 // 一个定时器同时驱动两处：右侧看板的数值游走、每台设备"负载 → 脉冲分级"的判定。
 // 放同一个定时器是刻意的 —— 否则会出现面板已经换新、脚下脉冲还挂在旧状态上。
-const MONITOR_SETTINGS = { intervalMs: 800 };
+const MONITOR_SETTINGS = { intervalMs: 3000 };
 const MON_LIMITS = { intervalMs: [200, 5000, 100] };
 const MS_KEY = "hm.mon.v1";
 try {
   const saved = JSON.parse(localStorage.getItem(MS_KEY) || "{}");
   if (Number.isFinite(saved.intervalMs)) MONITOR_SETTINGS.intervalMs = saved.intervalMs;
 } catch (e) { /* 读不到就用默认值 */ }
-function setMonitorSetting(key, value) {
+function setMonitorSetting(key, value, quiet) {
   const lim = MON_LIMITS[key];
   if (!lim) return;
   const v = Math.round(Number(value) / lim[2]) * lim[2];
@@ -1882,6 +1937,7 @@ function setMonitorSetting(key, value) {
   MONITOR_SETTINGS[key] = clampv(v, lim[0], lim[1]);
   try { localStorage.setItem(MS_KEY, JSON.stringify(MONITOR_SETTINGS)); } catch (e) { /* 无痕模式写不进去就算了 */ }
   startBeat();
+  if (!quiet) touchSettings();
 }
 let beatTimer = 0;
 function beat() {
@@ -1902,6 +1958,10 @@ function startBeat() {
 // 参考另外挂了 UnrealBloomPass 做辉光：派单禁止 three 的 examples/，这里不引 ——
 // 光晕只剩贴图自身的柔光衰减 + 叠加混合，整体比参考暗一档是预期，不是掉效果。
 const PULSE_SETTINGS = {
+  enabled: false,              // 总开关：关掉 = 立刻停发 + 把还在飞的清干净（不是"停发不停飞"那种慢收尾）
+                               // 2026-09-23 按用户要求默认关（部署成看板先安静起步）。
+                               // ⚠ 涟漪是"脉冲爆发时踢一脚"才有的 —— 这个开关关着，地面就一直是平的，
+                               //   要看见涟漪得先打开它（或把 设置.json 里 pulse.enabled 改成 true）。
   pulseStartBrightness: 0.95,  // 刚发射时的不透明度
   pulseEndBrightness: 0.03,    // 飞到最远端时的不透明度（越小越"划过去就没"）
   // 参考给的是 0.35，但那是"相机 48 单位看 6 单位的机器"；这里全景相机离地十几米，
@@ -1909,16 +1969,35 @@ const PULSE_SETTINGS = {
   // 要更亮自己拖那一格（滑杆上限仍是 1）。
   upParticleBrightness: 0.22,  // 向上粒子整体亮度，独立于脉冲，免得两个通道互相盖
   travelK: 6,                  // 扩散范围 = 机器本体 footprint 半径 × 这个系数（mATX 那一档 ≈ 1.0 m）
+  // ---- 地面涟漪 + 二进制雨（2026-09-23 融合，参考在 涟漪地面/ 与 docs/参考-数字雨/）----
+  // 两颗开关互相独立、也独立于上面的 enabled：脉冲关了脚下安静，地面和雨照旧。
+  rippleEnabled: true,
+  rippleHeight: 0.5,           // 涟漪高度（参考单位）：0 = 只亮不起伏
+  rippleSpeed: 10,             // 环每秒荡多远（参考单位/秒）：10 像水面、40 像冲击波
+  rippleThickness: 1.0,        // 环厚度：0.3 一圈激光环、4 一片水波
+  rippleBrightness: 0.25,      // 点阵被点亮的程度（参考推荐"克制"档）
+  rainEnabled: true,
+  rainBrightness: 0.8,         // 数字雨不透明度上限就是 0.8（再高加法混合糊成一片）
 };
 const PULSE_LIMITS = {
   pulseStartBrightness: [0.05, 1, 0.01],
   pulseEndBrightness: [0.02, 0.8, 0.01],
   upParticleBrightness: [0.02, 1, 0.01],
   travelK: [2, 16, 0.5],
+  // 范围照参考参数表的"建议范围"：height 0~8 / speed 5~50 / thickness 0.3~4 / brightness 0~2 / rain 0~0.8
+  rippleHeight: [0, 8, 0.1],
+  rippleSpeed: [5, 50, 1],
+  rippleThickness: [0.3, 4, 0.1],
+  rippleBrightness: [0, 2, 0.05],
+  rainBrightness: [0, 0.8, 0.01],
 };
 const PS_KEY = "hm.pulse.v1";
 try {
   const saved = JSON.parse(localStorage.getItem(PS_KEY) || "{}");
+  // enabled 是布尔，不在 PULSE_LIMITS 里（那张表只管"数值 + 上下限 + 步进"），单独恢复
+  if (typeof saved.enabled === "boolean") PULSE_SETTINGS.enabled = saved.enabled;
+  if (typeof saved.rippleEnabled === "boolean") PULSE_SETTINGS.rippleEnabled = saved.rippleEnabled;
+  if (typeof saved.rainEnabled === "boolean") PULSE_SETTINGS.rainEnabled = saved.rainEnabled;
   for (const k in PULSE_LIMITS) if (Number.isFinite(saved[k])) setPulseSetting(k, saved[k], true);
 } catch (e) { /* 读不到就用默认值 */ }
 function setPulseSetting(key, value, quiet) {
@@ -1929,14 +2008,27 @@ function setPulseSetting(key, value, quiet) {
   PULSE_SETTINGS[key] = clampv(v, lim[0], lim[1]);
   if (quiet) return;   // 启动时恢复存档：逐个写 localStorage 没必要，也不该反过来覆盖
   try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); } catch (e) { /* 同上 */ }
+  touchSettings();
+}
+// 关的时候不等在飞的自己散完：拨开关要的是"这一帧屏幕上就没了"，慢收尾看着像开关没生效。
+// 函数体引用的 livePulses / liveUp / disposePoints 在下面才声明 —— 只在点击时调用，不在求值期跑。
+function setPulseEnabled(on, quiet) {
+  PULSE_SETTINGS.enabled = !!on;
+  try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); } catch (e) { /* 同上 */ }
+  if (!quiet) touchSettings();
+  if (PULSE_SETTINGS.enabled) return;
+  for (const rt of pulseRt.values()) { rt.queue.length = 0; rt.nextBurst = null; }
+  for (let i = livePulses.length - 1; i >= 0; i--) disposePoints(livePulses, i);
+  for (let i = liveUp.length - 1; i >= 0; i--) disposePoints(liveUp, i);
 }
 
 // 三级分级：结构照参考保留（颜色 / 间隔 / 单次爆发几连），max = 这一档的负载上限（%）。
+// amplitude 是地面涟漪的强度（参考值：空闲 0.6 / 活跃 0.85 / 警报 1.2），跟脚下脉冲同一拍激起。
 // 阈值是我先定的，要聊就改这三格，别的都不用动。
 const STATES = [
-  { key: "IDLE", cn: "空闲", color: 0x00ff41, interval: 3.0, burst: 1, max: 35 },
-  { key: "ACTIVE", cn: "活跃", color: 0xffcc00, interval: 2.0, burst: 2, max: 70 },
-  { key: "ALERT", cn: "高负载", color: 0xff0033, interval: 1.2, burst: 3, max: 100 },
+  { key: "IDLE", cn: "空闲", color: 0x00ff41, interval: 3.0, burst: 1, max: 35, amplitude: 0.6 },
+  { key: "ACTIVE", cn: "活跃", color: 0xffcc00, interval: 2.0, burst: 2, max: 70, amplitude: 0.85 },
+  { key: "ALERT", cn: "高负载", color: 0xff0033, interval: 1.2, burst: 3, max: 100, amplitude: 1.2 },
 ];
 const stateOf = (load) => STATES.find((s) => load <= s.max) || STATES[STATES.length - 1];
 
@@ -1977,14 +2069,282 @@ function tailTexture() {
 const dotTex = softDotTexture();
 const tailTex = tailTexture();
 
-// 每台的负载（0~100）：填全了凭据且抓到过帧 → 用 1 分钟负载/核数，否则本地随机游走。
+// ---------- 地面：点阵涟漪地形（2026-09-23 融合，参考 = 涟漪地面/ 那两份）----------
+// 参考是"300 单位一张地、相机离地几十单位"的口径；这里 1 单位 = 1 mm、地面要铺满 24000 mm。
+// 换算纪律跟脚下脉冲同一条：几何建在**参考单位**里（300×300、180 细分），整张 mesh 乘 GROUND_S
+// 放大到毫米 —— 于是公式里的 0.5 / 0.008 / 100 / 150 / 4.0 一个都不用改，参考那张调参表 1:1 成立。
+// 只有点径这种"材质尺寸"不受 mesh.scale 管（three 的 point size 是世界单位），单独乘一次 GROUND_S。
+const GROUND_S = 80;   // 1 参考单位 = 80 mm：300 单位 × 80 = 24000 mm，正好替掉原 GridHelper 那张地
+const RIPPLE_MAX_AGE = 4.0;   // 参考写死 4 秒（folder 版参数表里没有寿命滑杆，就不造一个）
+const RIPPLE_MAX = 32;        // 同时存活的环数上限（8 台全 ALERT 稳态约 27 个，留点余量）
+const GROUND_SEG = 180;       // 参考的性能上限：180×180 → 181² = 32761 顶点
+const GROUND_STEP = 300 / GROUND_SEG;
+class RippleTerrain {
+  constructor(sc) {
+    this.geometry = new THREE.PlaneGeometry(300, 300, GROUND_SEG, GROUND_SEG);
+    this.geometry.rotateX(-Math.PI / 2);
+    this.count = this.geometry.attributes.position.count;
+    const colors = new Float32Array(this.count * 3);
+    for (let i = 0; i < this.count; i++) {   // 平静时 = 待机电路板那种暗蓝
+      colors[i * 3] = 0.02; colors[i * 3 + 1] = 0.06; colors[i * 3 + 2] = 0.15;
+    }
+    this.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    this.material = new THREE.PointsMaterial({
+      size: 0.7 * GROUND_S, map: dotTex, vertexColors: true, transparent: true, opacity: 0.85,
+      blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+    });
+    this.mesh = new THREE.Points(this.geometry, this.material);
+    this.mesh.scale.setScalar(GROUND_S);
+    this.mesh.position.y = -1;   // 原 GridHelper 的高度：机器脚踩在点阵上，不悬空也不陷进去
+    sc.add(this.mesh);
+    this.ripples = [];
+    this.flat = true;   // 上一个无涟漪帧已经把地面抹平过 → 没涟漪时不必每帧重写三万个顶点
+    this.lut = new Float32Array(257);   // 波形查表（见 update 里的注释）
+    this.lutThick = NaN;
+    this.lutBand = 0;
+    this.rowLists = Array.from({ length: GROUND_SEG + 1 }, () => []);   // 每行落在哪些环带里
+  }
+  addRipple(x, z, colorHex, amplitude = 1) {
+    const c = new THREE.Color(colorHex);
+    this.ripples.push({ x: x / GROUND_S, z: z / GROUND_S, colorR: c.r, colorG: c.g, colorB: c.b,
+      age: 0, radius: 0, amplitude });
+    // 上限兜最坏情况：参考演示只有 3 台设备，我们 8 台全 ALERT 时稳态能到三十几个环，
+    // 不设上限的话每帧成本无顶。超了丢最老的（视觉上就是最淡的那圈先没）。
+    while (this.ripples.length > RIPPLE_MAX) this.ripples.shift();
+  }
+  clear() { this.ripples.length = 0; }
+  update(delta) {
+    const positions = this.geometry.attributes.position.array;
+    const colors = this.geometry.attributes.color.array;
+    const height = PULSE_SETTINGS.rippleHeight;
+    const speed = PULSE_SETTINGS.rippleSpeed;
+    const thickness = PULSE_SETTINGS.rippleThickness;
+    const brightness = PULSE_SETTINGS.rippleBrightness;
+    const maxAge = RIPPLE_MAX_AGE;
+    for (let i = this.ripples.length - 1; i >= 0; i--) {
+      const r = this.ripples[i];
+      r.age += delta;
+      r.radius = r.age * speed;
+      if (r.age >= maxAge || r.radius > 150) this.ripples.splice(i, 1);
+    }
+    if (!this.ripples.length) {
+      if (this.flat) return;
+      for (let i = 0; i < this.count; i++) {
+        positions[i * 3 + 1] = 0;
+        colors[i * 3] = 0.02; colors[i * 3 + 1] = 0.06; colors[i * 3 + 2] = 0.15;
+      }
+      this.flat = true;
+      this.geometry.attributes.position.needsUpdate = true;
+      this.geometry.attributes.color.needsUpdate = true;
+      return;
+    }
+    this.flat = false;
+    // 两刀性能（公式本身一个字没动，改的是"哪些顶点要算"和"exp/sin 算几次"）：
+    // ① 波形 sin(d·0.5)·exp(-d²/(t²·100)) 只跟 d 和 thickness 有关 → 厚度没变就查表，
+    //    把每顶点两次超越函数换成一次取整下标（256 格，步长约 0.2 参考单位 = 16 mm）。
+    // ② 高斯包络在 |d| > 26.3×thickness 时已小于千分之一 → 按行带剔除：整行不在任何环带里
+    //    就只抹平不累加；行内再对每个涟漪做平方距离拒绝（连 sqrt 都省）。
+    //    不剔除的话 8 台稳态二十几个环 × 32761 顶点 = 每帧近百万次 sqrt/exp/sin，实测 9.6 ms。
+    const band = thickness * 26.3;
+    if (thickness !== this.lutThick) {
+      for (let i = 0; i <= 256; i++) {
+        const d = -band + (i / 256) * 2 * band;
+        this.lut[i] = Math.sin(d * 0.5) * Math.exp(-(d * d) / (thickness * thickness * 100));
+      }
+      this.lutThick = thickness;
+      this.lutBand = band;
+    }
+    const lut = this.lut, lutBand = this.lutBand, inv = 256 / (2 * lutBand);
+    const rows = this.rowLists;
+    for (let iy = 0; iy <= GROUND_SEG; iy++) rows[iy].length = 0;
+    for (let k = 0; k < this.ripples.length; k++) {
+      const r = this.ripples[k];
+      r.k = (1 - r.age / maxAge) * Math.exp(-r.radius * 0.008) * r.amplitude;
+      const outer = r.radius + band;
+      r.outer2 = outer * outer;
+      const inner = Math.max(0, r.radius - band);
+      r.inner2 = inner * inner;
+      const row0 = Math.max(0, Math.floor((r.z - outer + 150) / GROUND_STEP));
+      const row1 = Math.min(GROUND_SEG, Math.ceil((r.z + outer + 150) / GROUND_STEP));
+      for (let iy = row0; iy <= row1; iy++) rows[iy].push(k);
+    }
+    for (let iy = 0; iy <= GROUND_SEG; iy++) {
+      const list = rows[iy];
+      const rowBase = iy * (GROUND_SEG + 1) * 3;
+      if (!list.length) {   // 整行无环：仍要写平（上一帧这里可能正隆着）
+        for (let ix = 0; ix <= GROUND_SEG; ix++) {
+          const p = rowBase + ix * 3;
+          positions[p + 1] = 0;
+          colors[p] = 0.02; colors[p + 1] = 0.06; colors[p + 2] = 0.15;
+        }
+        continue;
+      }
+      const bz = -150 + iy * GROUND_STEP;
+      for (let ix = 0; ix <= GROUND_SEG; ix++) {
+        const bx = -150 + ix * GROUND_STEP;
+        let y = 0;
+        let cr = 0.02, cg = 0.06, cb = 0.15;
+        for (let q = 0; q < list.length; q++) {
+          const r = this.ripples[list[q]];
+          const dx = bx - r.x, dz = bz - r.z;
+          const d2 = dx * dx + dz * dz;
+          if (d2 > r.outer2 || d2 < r.inner2) continue;
+          const d = Math.sqrt(d2) - r.radius;
+          let li = ((d + lutBand) * inv) | 0;
+          if (li < 0) li = 0; else if (li > 256) li = 256;   // 平方拒绝后理论不越界，越界会读出 NaN 且永久脏在颜色里
+          const wave = lut[li] * r.k;
+          y += wave * height;
+          const glow = Math.abs(wave) * brightness;
+          cr += r.colorR * glow * 0.9;
+          cg += r.colorG * glow * 0.9;
+          cb += r.colorB * glow * 0.9;
+        }
+        const p = rowBase + ix * 3;
+        positions[p + 1] = y;
+        colors[p] = Math.min(1, cr);
+        colors[p + 1] = Math.min(1, cg);
+        colors[p + 2] = Math.min(1, cb);
+      }
+    }
+    this.geometry.attributes.position.needsUpdate = true;
+    this.geometry.attributes.color.needsUpdate = true;
+  }
+}
+const rippleTerrain = new RippleTerrain(scene);
+function setRippleEnabled(on, quiet) {
+  PULSE_SETTINGS.rippleEnabled = !!on;
+  try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); } catch (e) { /* 同上 */ }
+  if (!PULSE_SETTINGS.rippleEnabled) rippleTerrain.clear();   // 同脉冲开关：关掉这一帧地面就平
+  if (!quiet) touchSettings();
+}
+
+// ---------- 背景：二进制雨（参考 = docs/参考-数字雨/ 整页里的 DigitalRainBackground）----------
+// 参考把雨布在 −Z 一面幕布上（它的相机不绕）；我们是轨道相机，转过去那面"字墙"就穿帮，
+// 所以按对齐结论改成**环绕地图的圆柱壳**：粒子数 / 贴图 / 速度口径全照参考，只换分布。
+// 半径 40000~54000：相机最远能拉到 30000（滚轮/双指的硬上限），壳必须整个套在相机外面 ——
+// 早先写 16000~22000 是错的：全景就是 16000，等于把雨贴在镜头上，字会有半屏大。
+// 换算比例另起一个 RAIN_S，不能借地面的 GROUND_S：地面按"地图多大"换（300 单位→24000 mm），
+// 雨是背景层，看着多大／多快只取决于"相机离它多远"。参考相机离雨幕约 140 单位，
+// 我们全景时离壳约 56000 mm → 1 参考单位 = 400 mm，正好是 GROUND_S 的 5 倍。
+const RAIN_S = 400;
+const RAIN_R0 = 40000, RAIN_R1 = 54000;
+const RAIN_TOP = 80 * RAIN_S;        // 参考雨柱高 80 单位（再高的看不见：地平线以上就那么一条）
+const RAIN_BOTTOM = -5 * RAIN_S;     // 参考落到 y<−5 就重生
+function rainGlyphTexture() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const x = c.getContext("2d");
+  x.font = 'bold 100px "Courier New", monospace';
+  x.textAlign = "center"; x.textBaseline = "middle";
+  x.shadowColor = "#00aaff"; x.shadowBlur = 15;
+  x.fillStyle = "#ffffff";
+  x.fillText(Math.random() > 0.5 ? "0" : "1", 64, 64);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+class BinaryRain {
+  constructor(sc) {
+    const n = 800;
+    const pos = new Float32Array(n * 3);
+    this.speeds = new Float32Array(n);
+    for (let i = 0; i < n; i++) this._respawn(pos, i, true);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    // fog:false：雨在 40~54 m 外，吃我们那条线性雾（20~46 m）会被吞成灰，背景层就该一直在
+    this.rainMat = new THREE.PointsMaterial({ color: 0x0088ff, size: 1.8 * RAIN_S, map: rainGlyphTexture(),
+      transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+      sizeAttenuation: true, fog: false });
+    this.rain = new THREE.Points(geo, this.rainMat);
+    sc.add(this.rain);
+
+    const m = 150;
+    const bpos = new Float32Array(m * 3);
+    this.bAng = new Float32Array(m); this.bRad = new Float32Array(m); this.bY = new Float32Array(m);
+    this.bW = new Float32Array(m);   // 每颗的角速度：参考是横向 1.5 单位/秒，换成绕壳转要除以半径
+    for (let i = 0; i < m; i++) {
+      this.bAng[i] = Math.random() * Math.PI * 2;
+      this.bRad[i] = RAIN_R0 + Math.random() * (RAIN_R1 - RAIN_R0);
+      this.bW[i] = (1.5 * RAIN_S) / this.bRad[i];
+      this.bY[i] = (5 + Math.random() * 40) * RAIN_S;   // 参考 y = 5 + rand*40
+      bpos[i * 3] = Math.cos(this.bAng[i]) * this.bRad[i];
+      bpos[i * 3 + 1] = this.bY[i];
+      bpos[i * 3 + 2] = Math.sin(this.bAng[i]) * this.bRad[i];
+    }
+    const bgeo = new THREE.BufferGeometry();
+    bgeo.setAttribute("position", new THREE.BufferAttribute(bpos, 3));
+    // sizeAttenuation:false = 参考原样：光斑是屏幕空间 2.5 px，不随距离缩
+    this.bokehMat = new THREE.PointsMaterial({ size: 2.5, map: dotTex, color: 0x00ccff,
+      transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+      sizeAttenuation: false, fog: false });
+    this.bokeh = new THREE.Points(bgeo, this.bokehMat);
+    sc.add(this.bokeh);
+  }
+  _respawn(arr, i, anywhere) {
+    const a = Math.random() * Math.PI * 2;
+    const r = RAIN_R0 + Math.random() * (RAIN_R1 - RAIN_R0);
+    arr[i * 3] = Math.cos(a) * r;
+    // anywhere = 首帧铺满整柱；之后只在柱顶以上 20 单位（参考原样）重生，免得眼前凭空冒字
+    arr[i * 3 + 1] = anywhere ? Math.random() * RAIN_TOP : RAIN_TOP + Math.random() * 20 * RAIN_S;
+    arr[i * 3 + 2] = Math.sin(a) * r;
+    this.speeds[i] = (3 + Math.random() * 5) * RAIN_S;   // 参考 3~8 单位/秒 → 毫米/秒
+  }
+  update(delta) {
+    const gb = PULSE_SETTINGS.rainEnabled ? PULSE_SETTINGS.rainBrightness : 0;
+    this.rainMat.opacity = gb;
+    this.bokehMat.opacity = gb * 0.8;
+    if (!PULSE_SETTINGS.rainEnabled) return;   // 关着 = 不透明度 0 且粒子冻住，省掉每帧 950 次写
+    const pos = this.rain.geometry.attributes.position.array;
+    for (let i = 0; i < this.speeds.length; i++) {
+      pos[i * 3 + 1] -= this.speeds[i] * delta;
+      if (pos[i * 3 + 1] < RAIN_BOTTOM) this._respawn(pos, i, false);
+    }
+    this.rain.geometry.attributes.position.needsUpdate = true;
+    const bpos = this.bokeh.geometry.attributes.position.array;
+    for (let i = 0; i < this.bAng.length; i++) {
+      this.bAng[i] += this.bW[i] * delta;
+      this.bY[i] += 0.8 * RAIN_S * delta;        // 参考上升 0.8 单位/秒
+      if (this.bY[i] > 50 * RAIN_S) this.bY[i] = 0;   // 参考到 y>50 归零
+      bpos[i * 3] = Math.cos(this.bAng[i]) * this.bRad[i];
+      bpos[i * 3 + 1] = this.bY[i];
+      bpos[i * 3 + 2] = Math.sin(this.bAng[i]) * this.bRad[i];
+    }
+    this.bokeh.geometry.attributes.position.needsUpdate = true;
+  }
+}
+const binaryRain = new BinaryRain(scene);
+function setRainEnabled(on, quiet) {
+  PULSE_SETTINGS.rainEnabled = !!on;
+  try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); } catch (e) { /* 同上 */ }
+  if (!quiet) touchSettings();
+}
+function updateGround(delta) {
+  rippleTerrain.update(delta);
+  binaryRain.update(delta);
+}
+// 雨壳的数值正对照：截图是黑的（WebGL 抓帧的老毛病），"壳围着地图"这件事只能靠半径/高度范围证明
+function rainBounds() {
+  const p = binaryRain.rain.geometry.attributes.position.array;
+  let r0 = Infinity, r1 = -Infinity, y0 = Infinity, y1 = -Infinity, ySum = 0;
+  for (let i = 0; i < p.length; i += 3) {
+    const rr = Math.hypot(p[i], p[i + 2]);
+    if (rr < r0) r0 = rr;
+    if (rr > r1) r1 = rr;
+    if (p[i + 1] < y0) y0 = p[i + 1];
+    if (p[i + 1] > y1) y1 = p[i + 1];
+    ySum += p[i + 1];
+  }
+  return { 雨滴: p.length / 3, 壳半径mm: [RAIN_R0, RAIN_R1], 雨柱高mm: RAIN_TOP,
+    字径mm: binaryRain.rainMat.size, 最慢mm每秒: 3 * RAIN_S, 最快mm每秒: 8 * RAIN_S,
+    雨半径mm: [Math.round(r0), Math.round(r1)], 雨高度mm: [Math.round(y0), Math.round(y1)],
+    雨Y和mm: Math.round(ySum),   // 两次读数不同 = 雨真在下（关掉开关后应当不动）
+    光斑: binaryRain.bAng.length };
+}
+
+// 每台的负载（0~100）：填了地址+用户名且抓到过帧 → 用那一帧的真数，否则本地随机游走。
 // 这一格同时是分级判定的输入，所以"看板上是什么数"和"脚下是什么颜色"是同一个来源。
 const loads = new Map();   // device.id -> { pct, key }
-function realLoadOf(d) {
-  const f = d.frame;
-  if (!f || !(f.cores > 0) || typeof f.load1 !== "number") return null;
-  return clampv((f.load1 / f.cores) * 100, 0, 100);
-}
+const realLoadOf = (d) => framePct(d.frame);
 function stepLoads(t) {
   for (const d of devices) {
     let w = loads.get(d.id);
@@ -2024,9 +2384,10 @@ function makePoints(n, color, size, map) {
 }
 
 // 一次"爆发"= 按 burst 次数排进延迟队列，间隔 0 / 0.2 / 0.35s，形成"嘟"、"嘟嘟"、"嘟嘟嘟"的节奏
+// amplitude 一起进队：地面涟漪跟脚下环同一拍、同一色、同一强度激起（三连发 = 三圈先后荡出）
 function triggerBurst(rt, st, t) {
   for (let i = 0; i < st.burst; i++) {
-    rt.queue.push({ at: t + (i === 0 ? 0 : i === 1 ? 0.2 : 0.35), color: st.color });
+    rt.queue.push({ at: t + (i === 0 ? 0 : i === 1 ? 0.2 : 0.35), color: st.color, amplitude: st.amplitude });
   }
 }
 
@@ -2077,6 +2438,12 @@ function disposePoints(list, i) {
 }
 
 function updatePulses(dt, t) {
+  // 总开关关着：一个都不发。nextBurst 留 null，重新打开时相位会重新错开，
+  // 不会出现"关掉五分钟、一打开全场同时炸一轮"。
+  if (!PULSE_SETTINGS.enabled) {
+    for (const rt of pulseRt.values()) { rt.queue.length = 0; rt.nextBurst = null; }
+    return;
+  }
   holders.forEach((h, i) => {
     const d = devices[i];
     let rt = d && pulseRt.get(d.id);
@@ -2096,9 +2463,12 @@ function updatePulses(dt, t) {
     for (let j = rt.queue.length - 1; j >= 0; j--) {
       if (t < rt.queue[j].at) continue;
       const color = rt.queue[j].color;
+      const amp = rt.queue[j].amplitude;
       rt.queue.splice(j, 1);
       spawnPulse(h, color);
       spawnUpward(h, color);
+      // 地面涟漪跟脚下环同一拍激起（独立开关，脉冲关着它也可以自己在荡）
+      if (PULSE_SETTINGS.rippleEnabled) rippleTerrain.addRipple(h.x, h.z, color, amp);
     }
   });
 
@@ -2316,7 +2686,7 @@ function renderList() {
     testBtn.type = "button";
     const sshSt = el("span", "cname", liveOf(d) ? (d.frame ? "已取到一帧" : "凭据已填，未测") : "未填凭据 · 走模拟");
     testBtn.addEventListener("click", async () => {
-      if (!liveOf(d)) { tipResult(d, { ok: false, error: "地址 / 用户名 / 密码 没填全 —— 这台继续走模拟数据" }); return; }
+      if (!liveOf(d)) { tipResult(d, { ok: false, error: "地址 / 用户名 没填 —— 这台继续走模拟数据" }); return; }
       testBtn.disabled = true;
       testBtn.textContent = "测试中…";
       const res = await probeDevice(d);
@@ -2339,7 +2709,9 @@ function renderList() {
       fieldRow("SSH", sshLine),
       el("div", "netnote", "名称 / 档位 / 电源 / 系统 / 连接地址 / 用户名 → 写进同目录的 设备清单.json（跑 serve.mjs 时）。"
         + "密码按你说的明文存进这个文件（它因此是敏感文件，见 serve.mjs 顶上那句提醒）。"
-        + "三格填全 = 这台改走 SSH 抓一帧；缺任一格 = 模拟数据。")
+        + "地址 + 用户名 填了 = 这台走 SSH 抓一帧（密码可以是空的：Windows 那几台本来就不设密码）；"
+        + "地址或用户名空着 = 模拟数据。“系统”那一格不只是画屏幕用的 —— 抓帧也按它分流，"
+        + "Windows 走 PowerShell、Linux 走 sh。")
     );
 
     det.append(sum, body);
@@ -2403,7 +2775,7 @@ document.getElementById("dadd").addEventListener("click", () => {
   touch();
 });
 
-// ---------- 设置弹窗：左侧分类导轨 + 右侧三块面板 ----------
+// ---------- 设置弹窗：左侧分类导轨 + 右侧四块面板 ----------
 // 导轨只切 display，不重建 DOM：滑杆的值由 PULSE_SETTINGS / MONITOR_SETTINGS 单一来源渲染，
 // 切来切去不会把用户刚拖到的位置忘掉。
 const catBtns = Array.from(document.querySelectorAll("#dlg .rail .cat"));
@@ -2439,6 +2811,10 @@ function sliderRow(mount, o) {
 
 const pctFmt = (v) => Math.round(v * 100) + "%";
 const mmFmt = (v) => "×" + v.toFixed(1);
+// 能被"外部改设置"刷新的控件都把自己那次 paint 登记进来：设置.json 被改了 → applySettings 落到内存 →
+// 一声令下把这些控件重画一遍，滑杆位置与开关文案立刻跟上（否则文件里改了值，屏上滑杆还停在旧位置）。
+const uiPaints = [];
+function paintSettingsUI() { for (const f of uiPaints) f(); }
 for (const o of [
   { key: "pulseStartBrightness", limits: PULSE_LIMITS.pulseStartBrightness, title: "脉冲起始亮度",
     hint: "刚发射那一刻的亮度。调大更扎眼，调小变成\"暗流涌动\"。", fmt: pctFmt },
@@ -2449,18 +2825,208 @@ for (const o of [
   { key: "travelK", limits: PULSE_LIMITS.travelK, title: "脉冲范围",
     hint: "扩散半径 = 机器本体（不含显示器/键鼠）底面半径 × 这个倍数。6 大约是台间距的一半，再大就穿到邻居家脚下。", fmt: mmFmt },
 ]) {
-  sliderRow(document.getElementById("pulseRows"), {
+  uiPaints.push(sliderRow(document.getElementById("pulseRows"), {
     title: o.title, hint: o.hint, limits: o.limits, fmt: o.fmt,
     get: () => PULSE_SETTINGS[o.key],
     set: (v) => setPulseSetting(o.key, v),
-  });
+  }));
 }
-sliderRow(document.getElementById("monRows"), {
-  title: "采集间隔", hint: "一秒钟走几轮的间隔。200ms 最激进，5000ms 最省。",
-  limits: MON_LIMITS.intervalMs, fmt: (v) => v.toFixed(0) + " ms · " + (1000 / v).toFixed(1) + " 次/秒",
+uiPaints.push(sliderRow(document.getElementById("monRows"), {
+  title: "采集间隔", hint: "多少毫秒走一轮。200ms 最激进，5000ms 最省。",
+  limits: MON_LIMITS.intervalMs,
+  // 只报"每 xx ms 1 次"：原来那格还算了个 1000/v，出来的"1.2 次/秒 / 1.3 次/秒"是小数，读着像故障
+  fmt: (v) => "每 " + v.toFixed(0) + " ms 1 次",
   get: () => MONITOR_SETTINGS.intervalMs,
   set: (v) => setMonitorSetting("intervalMs", v),
-});
+}));
+
+// 脉冲总开关那一颗按钮：文案与配色跟状态同源，不另存一份
+const pulseOnBtn = document.getElementById("pulseOn");
+function paintPulseOn() {
+  const on = PULSE_SETTINGS.enabled;
+  pulseOnBtn.classList.toggle("on", on);
+  pulseOnBtn.textContent = on ? "脉冲 开" : "脉冲 关";
+  pulseOnBtn.setAttribute("aria-pressed", String(on));
+}
+pulseOnBtn.addEventListener("click", () => { setPulseEnabled(!PULSE_SETTINGS.enabled); paintPulseOn(); });
+paintPulseOn();
+uiPaints.push(paintPulseOn);
+
+// 地面与雨：四格涟漪滑杆 + 一格雨亮度，跟脉冲滑杆同一条 sliderRow / 同一份 PULSE_SETTINGS
+for (const o of [
+  { key: "rippleHeight", title: "涟漪高度", fmt: (v) => v.toFixed(1),
+    hint: "0 = 环只亮不起伏（水面静谧感）；0.5 轻触、2.5 投石、8 山丘。参考推荐 0.5 / 2.5。" },
+  { key: "rippleSpeed", title: "涟漪速度", fmt: (v) => v.toFixed(0),
+    hint: "环每秒荡多远。10 像水面涟漪、22 有脉冲节奏、50 像冲击波扫过。" },
+  { key: "rippleThickness", title: "涟漪环厚度", fmt: (v) => v.toFixed(1),
+    hint: "0.3 一圈激光环、1.0 精细、4 一片水波。过大环会糊在一起失去\"环\"形。" },
+  { key: "rippleBrightness", title: "涟漪亮度", fmt: pctFmt,
+    hint: "点阵被点亮的程度。0 只剩起伏看不见环；2 过曝发白。参考推荐 0.25 克制档。" },
+]) {
+  uiPaints.push(sliderRow(document.getElementById("rippleRows"), {
+    title: o.title, hint: o.hint, limits: PULSE_LIMITS[o.key], fmt: o.fmt,
+    get: () => PULSE_SETTINGS[o.key],
+    set: (v) => setPulseSetting(o.key, v),
+  }));
+}
+uiPaints.push(sliderRow(document.getElementById("rainRows"), {
+  title: "雨亮度", hint: "0 隐藏、0.3 远景氛围、0.8 雨成主角。上限就是 0.8，再高加法混合糊成一片。",
+  limits: PULSE_LIMITS.rainBrightness, fmt: (v) => v.toFixed(2),
+  get: () => PULSE_SETTINGS.rainBrightness,
+  set: (v) => setPulseSetting("rainBrightness", v),
+}));
+// 涟漪 / 雨两颗独立开关：跟脉冲开关同一种按钮长相，但各管各的
+function bindOnOff(id, label, get, set) {
+  const b = document.getElementById(id);
+  const paint = () => {
+    const on = get();
+    b.classList.toggle("on", on);
+    b.textContent = label + (on ? " 开" : " 关");
+    b.setAttribute("aria-pressed", String(on));
+  };
+  b.addEventListener("click", () => { set(!get()); paint(); });
+  paint();
+  return paint;
+}
+uiPaints.push(bindOnOff("rippleOn", "涟漪", () => PULSE_SETTINGS.rippleEnabled, setRippleEnabled));
+uiPaints.push(bindOnOff("rainOn", "雨", () => PULSE_SETTINGS.rainEnabled, setRainEnabled));
+
+// ---------- 设置 ↔ 本地 设置.json（2026-09-23：从"只活在浏览器里"改成"文件是真源"）----------
+// 三组：pulse（脉冲）/ ground（地面与雨）/ monitor（采集频率）。键名跟代码里一模一样 —— 不另起一套中文键，
+// 多一层映射就多一处会走散的地方；范围那张真表仍是页面里的 PULSE_LIMITS / MON_LIMITS，服务端只校验形状。
+// 方向是双向：启动先读文件（文件在就是权威，覆盖浏览器里的旧存档），页面里拖滑块/点开关 400 ms 后写回；
+// localStorage 只在 file:// 没服务时兜底。另外每 5 秒读一次 —— 部署成看板后，在服务器上改这个 json、
+// 墙上几秒后自己就变，不用去碰那台机器的浏览器。
+const SET_API = "/api/settings";
+const SET_FILE = "设置.json";
+const setLine = document.getElementById("setline");
+let setMode = "内存";
+let setTimer = 0;
+let setSaving = false;
+function settingsToFile() {
+  return {
+    pulse: {
+      enabled: PULSE_SETTINGS.enabled,
+      pulseStartBrightness: PULSE_SETTINGS.pulseStartBrightness,
+      pulseEndBrightness: PULSE_SETTINGS.pulseEndBrightness,
+      upParticleBrightness: PULSE_SETTINGS.upParticleBrightness,
+      travelK: PULSE_SETTINGS.travelK,
+    },
+    ground: {
+      rippleEnabled: PULSE_SETTINGS.rippleEnabled,
+      rippleHeight: PULSE_SETTINGS.rippleHeight,
+      rippleSpeed: PULSE_SETTINGS.rippleSpeed,
+      rippleThickness: PULSE_SETTINGS.rippleThickness,
+      rippleBrightness: PULSE_SETTINGS.rippleBrightness,
+      rainEnabled: PULSE_SETTINGS.rainEnabled,
+      rainBrightness: PULSE_SETTINGS.rainBrightness,
+    },
+    monitor: { intervalMs: MONITOR_SETTINGS.intervalMs },
+  };
+}
+function setSetLine() {
+  setLine.textContent = setMode === "文件"
+    ? "设置存 " + SET_FILE + "：改文件即生效（每 5 秒读一次），页面里改动也写回它"
+    : "设置只在浏览器里（没连上服务？）：刷新不丢，换机器/换浏览器就不同步";
+}
+// 把文件里的值落到内存。这条路上的两处调用（启动读、5 秒轮询）都传 quiet，
+// 免得"读文件"反过来又触发一次"写文件"。
+function applySettings(o) {
+  if (!o || typeof o !== "object") return false;
+  let changed = false;
+  const p = o.pulse;
+  if (p && typeof p === "object") {
+    if (typeof p.enabled === "boolean" && p.enabled !== PULSE_SETTINGS.enabled) { setPulseEnabled(p.enabled, true); changed = true; }
+    for (const k of ["pulseStartBrightness", "pulseEndBrightness", "upParticleBrightness", "travelK"]) {
+      const lim = PULSE_LIMITS[k], v = Number(p[k]);
+      if (!Number.isFinite(v)) continue;
+      const nv = clampv(v, lim[0], lim[1]);
+      if (nv !== PULSE_SETTINGS[k]) { PULSE_SETTINGS[k] = nv; changed = true; }
+    }
+  }
+  const g = o.ground;
+  if (g && typeof g === "object") {
+    if (typeof g.rippleEnabled === "boolean" && g.rippleEnabled !== PULSE_SETTINGS.rippleEnabled) { setRippleEnabled(g.rippleEnabled, true); changed = true; }
+    if (typeof g.rainEnabled === "boolean" && g.rainEnabled !== PULSE_SETTINGS.rainEnabled) { setRainEnabled(g.rainEnabled, true); changed = true; }
+    for (const k of ["rippleHeight", "rippleSpeed", "rippleThickness", "rippleBrightness", "rainBrightness"]) {
+      const lim = PULSE_LIMITS[k], v = Number(g[k]);
+      if (!Number.isFinite(v)) continue;
+      const nv = clampv(v, lim[0], lim[1]);
+      if (nv !== PULSE_SETTINGS[k]) { PULSE_SETTINGS[k] = nv; changed = true; }
+    }
+  }
+  const m = o.monitor;
+  if (m && typeof m === "object") {
+    const v = Number(m.intervalMs);
+    if (Number.isFinite(v)) {
+      const lim = MON_LIMITS.intervalMs;
+      const nv = clampv(Math.round(v / lim[2]) * lim[2], lim[0], lim[1]);
+      if (nv !== MONITOR_SETTINGS.intervalMs) { MONITOR_SETTINGS.intervalMs = nv; startBeat(); changed = true; }
+    }
+  }
+  if (changed) {
+    // 内存变了就把浏览器那份兜底存档同步一下（file:// 场景全靠它）
+    try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); localStorage.setItem(MS_KEY, JSON.stringify(MONITOR_SETTINGS)); } catch (e) { /* 写不进就算了 */ }
+    paintSettingsUI();
+  }
+  return changed;
+}
+async function saveSettings() {
+  if (setMode !== "文件") return;
+  setSaving = true;
+  try {
+    const r = await fetch(SET_API, { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ settings: settingsToFile() }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  } catch (e) {
+    setMode = "内存";
+    setLine.textContent = "写入 " + SET_FILE + " 失败：" + e.message + "（设置改动只在浏览器里）";
+    setSaving = false;
+    return;
+  }
+  setSaving = false;
+  setSetLine();
+}
+function touchSettings() {
+  // 没接上文件就没得写；这条也顺带挡住启动期（那会儿 setMode 还是"内存"）
+  if (setMode !== "文件") return;
+  clearTimeout(setTimer);
+  setTimer = setTimeout(() => { setTimer = 0; saveSettings(); }, 400);
+}
+async function loadSettings() {
+  if (location.protocol === "file:") { setMode = "内存"; setSetLine(); return; }
+  try {
+    const r = await fetch(SET_API, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    setMode = "文件";
+    if (j.settings) {
+      // 手改文件写了越界值 → applySettings 钳回后跟文件不一致 → 回写一次，让文件等于"实际生效值"
+      if (applySettings(j.settings) && JSON.stringify(j.settings) !== JSON.stringify(settingsToFile())) saveSettings();
+    } else {
+      await saveSettings();   // 文件还没生成过：把当前这套默认写下去，"部署后有个能改的东西"才成立
+    }
+  } catch (e) {
+    setMode = "内存";
+  }
+  setSetLine();
+  setInterval(pollSettings, 5000);
+}
+async function pollSettings() {
+  // 本地刚改完还在写盘：这一拍别读，否则读回旧值、屏上会弹回去一下
+  if (setMode !== "文件" || setSaving || setTimer) return;
+  try {
+    const r = await fetch(SET_API, { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (!j.settings || JSON.stringify(j.settings) === JSON.stringify(settingsToFile())) return;   // 一样就别动
+    if (applySettings(j.settings)) {
+      saveSettings();   // 被钳回过 = "文件 ≠ 生效值"，顺手把文件写成生效值
+      setSetLine();
+    }
+  } catch (e) { /* 一拍读不到不当回事，下一拍再来 */ }
+}
 
 // ---------- 设备清单 ↔ 本地配置文件 ----------
 // 用 node serve.mjs 起本地服务打开这页时，编辑会写回同目录的 设备清单.json；
@@ -2676,14 +3242,18 @@ function numField(z, k, title) {
 function newZoneKey() {
   for (let n = 1; ; n++) if (!ZONES.some((z) => z.key === "zone" + n)) return "zone" + n;
 }
-// 新分区落在第一个空着的候选位（3 列 × 5 行，够 ZONE_MAX 个用）
+// 新分区落在第一个空着的候选位（3 列 × 5 行，够 ZONE_MAX 个用）。
+// 占位判断按"盒子会不会压到"算，不是按中心点差 200mm：默认摆位是半间距错开的（±ZC[0]），
+// 只比中心点的话新分区会正好叠在算力集群身上。
 function freeSpot() {
   const px = ZONE_FIELD.w + ZONE_AISLE, pz = ZONE_FIELD.d + ZONE_AISLE;
+  const clash = (x, z) => ZONES.some((q) => Math.abs(q.at[0] - x) < ZONE_FIELD.w
+    && Math.abs(q.at[1] - z) < ZONE_FIELD.d);
   for (const gz of [0, -1, 1, -2, 2]) for (const gx of [0, -1, 1]) {
     const x = gx * px, z = gz * pz;
-    if (!ZONES.some((q) => Math.abs(q.at[0] - x) < 200 && Math.abs(q.at[1] - z) < 200)) return [x, z];
+    if (!clash(x, z)) return [x, z];
   }
-  return [0, ZC[1] + 3 * ZONE_PITCH];
+  return [0, 3 * ZONE_PITCH];
 }
 document.getElementById("zadd").addEventListener("click", () => {
   if (ZONES.length >= ZONE_MAX) {
@@ -2831,6 +3401,14 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
   },
   devs: devices.map((d) => d.short + "|" + d.tier + "|" + (d.power ? "on" : "off") + "|" + d.os
     + "|" + (liveOf(d) ? (d.frame ? "SSH实测" : d.probeErr ? "SSH失败" : "SSH待抓") : "模拟")),
+  // 抓回来的那一帧里到底有什么。Windows 与 Linux 的口径不同（cpuCim 只有 Windows 有），
+  // 这里两个都列出来，免得"看板上的百分比"和"帧里的数"对不上时无从下嘴。
+  frames: () => devices.filter((d) => d.frame).map((d) => ({ 设备: d.short, 主机名: d.frame.hostname,
+    系统: d.frame.os, 核: d.frame.cores, 占用直报: d.frame.cpuPct, 负载均值: d.frame.load1,
+    换算占用: framePct(d.frame), 内存MB: [d.frame.memUsedMb, d.frame.memTotalMb],
+    磁盘B: [d.frame.diskUsedBytes, d.frame.diskTotalBytes], 卡: d.frame.gpu })),
+  probeFail: () => devices.filter((d) => d.probeErr).map((d) => d.short + "：" + d.probeErr),
+  probeOne: (short) => { const d = devices.find((x) => x.short === short); return d ? probeDevice(d) : "没有这台设备"; },
   // 背景标签页 rAF 不跑，脉冲系统没法自己走：这个钩子手推它。时间基准取"真时钟与上次探针里更靠前的那个"
   // 往后推，并且跨次调用保持单调 —— 上一版每次从 0 起，把队列里的延迟项甩到了"未来"，读数假 stuck。
   pulseRun: (steps) => {
@@ -2849,6 +3427,27 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
   pulseState: () => devices.map((d) => d.short + "|" + (d.power ? "on" : "off") + "|"
     + ((loads.get(d.id) || {}).key || "-") + "|" + ((loads.get(d.id) || {}).pct || 0).toFixed(0) + "%"),
   pulseSettings: () => ({ ...PULSE_SETTINGS, intervalMs: MONITOR_SETTINGS.intervalMs }),
+  // 设置存哪儿：部署成看板后"到底在读文件还是只在浏览器里"要能一问就答（屏上那行字也行，这里是给仪器用的）
+  settingsMode: () => ({ 模式: setMode, 文件: SET_FILE, 有待写盘: !!setTimer, 正在写盘: setSaving }),
+  // 地面与雨的读数：开关、活涟漪数、点阵规模、雨的不透明度（后台标签页 rAF 不跑时用 groundRun 手推）
+  ground: () => ({ 涟漪开关: PULSE_SETTINGS.rippleEnabled, 雨开关: PULSE_SETTINGS.rainEnabled,
+    活涟漪: rippleTerrain.ripples.length, 顶点: rippleTerrain.count, 地面平: rippleTerrain.flat,
+    雨不透明: +binaryRain.rainMat.opacity.toFixed(3), 光斑不透明: +binaryRain.bokehMat.opacity.toFixed(3),
+    点径mm: rippleTerrain.material.size, 放大: rippleTerrain.mesh.scale.x,
+    地面边长mm: Math.round(300 * GROUND_S), 地面高度mm: rippleTerrain.mesh.position.y, ...rainBounds() }),
+  groundRun: (steps) => {
+    const t0 = performance.now();
+    for (let i = 0; i < steps; i++) updateGround(0.05);
+    return { 每帧CPU毫秒: +((performance.now() - t0) / steps).toFixed(3), 活涟漪: rippleTerrain.ripples.length };
+  },
+  // 正对照：手动撒 n 个涟漪，量"有环"时的每帧成本（跟 groundRun 空跑对比才知道环带剔除省了多少）
+  rippleKick: (n) => {
+    for (let i = 0; i < n; i++) {
+      rippleTerrain.addRipple((Math.random() - 0.5) * 9000, (Math.random() - 0.5) * 9000,
+        [0x00ff41, 0xffcc00, 0xff0033][i % 3], 1);
+    }
+    return rippleTerrain.ripples.length;
+  },
   pulseLabels: () => holders.map((h) => h.stateLine.textContent + " [" + h.stateLine.className + "]"),
   // 分区读数：每台落在哪个区、区框在地面的范围、全景距离
   zones: () => devices.map((d) => d.short + "→" + zoneOf(d).cn + (d.zone ? "(手动)" : "(自动)")),
@@ -2955,6 +3554,7 @@ function tick() {
   const dt = Math.min(0.05, clock.getDelta());
   if (spinning) az += 0.0016;
   updatePulses(dt, clock.elapsedTime);
+  updateGround(dt);
   if (focusing) {
     target.lerp(want.target, 0.14);
     dist += (want.dist - dist) * 0.14;
@@ -2990,11 +3590,14 @@ function tick() {
 // 启动放在所有声明之后：sync → rebuild → fitOverview 要读 OVERVIEW / HOME，
 // 放在它们前面就是 TDZ 崩页（同一类错这一版已经踩过 liveOf 一次）。
 // 分区必须先于设备读：设备清单里的 zone 要对着"当前这套分区"验，反过来就全被当成手动钉的又不存在的区。
+// 设置要在 sync() 之前读：文件里的值得落在首屏上，不然开局那几秒屏上是 localStorage 的旧值。
 await loadZones();
 await loadDevices();
+await loadSettings();
 sync();
 renderZones();
 booted = true;
+bootProbe();   // 不等它：首屏先出画面，真数据抓到一帧就自己爬上去
 target.copy(OVERVIEW.target);
 dist = OVERVIEW.dist;   // 首屏就按"当前这一排"取景，不是按当初五台时凑的 9000
 applyCamera();
