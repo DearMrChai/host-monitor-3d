@@ -2,6 +2,7 @@
   {
     "name": "笔记本",
     "tier": "laptop",
+    "zone": "",
     "power": true,
     "os": "win",
     "host": "",
@@ -11,6 +12,7 @@
   {
     "name": "ITX",
     "tier": "itx",
+    "zone": "",
     "power": true,
     "os": "win",
     "host": "",
@@ -20,6 +22,7 @@
   {
     "name": "mATX",
     "tier": "matx",
+    "zone": "",
     "power": true,
     "os": "win",
     "host": "",
@@ -29,6 +32,7 @@
   {
     "name": "ATX",
     "tier": "atx",
+    "zone": "",
     "power": true,
     "os": "win",
     "host": "",
@@ -38,6 +42,7 @@
   {
     "name": "E-ATX",
     "tier": "eatx",
+    "zone": "",
     "power": true,
     "os": "win",
     "host": "",
@@ -47,6 +52,7 @@
   {
     "name": "NAS",
     "tier": "nas",
+    "zone": "",
     "power": true,
     "os": "linux",
     "host": "",
@@ -56,6 +62,7 @@
   {
     "name": "交换机",
     "tier": "switch",
+    "zone": "",
     "power": true,
     "os": "linux",
     "host": "",
@@ -65,6 +72,7 @@
   {
     "name": "路由器",
     "tier": "router",
+    "zone": "",
     "power": true,
     "os": "linux",
     "host": "",

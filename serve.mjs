@@ -13,20 +13,22 @@ const FILE = path.join(DIR, "设备清单.json");
 const PORT = Number(process.env.PORT || 8123);
 const MAX_BYTES = 64 * 1024;
 const TIERS = new Set(["laptop", "matx", "atx", "eatx", "itx", "nas", "switch", "router"]);
+// 四个区。zone 留空 = 页面按档位自动落区，所以默认清单里全是空串。
+const ZONES = new Set(["compute", "edge", "storage", "net"]);
 
 // 三台网络设备没有屏幕，os 那一格对它们不起作用，填 linux 只是别让下拉显示"Windows"那么别扭
 const DEFAULTS = [
-  { name: "笔记本", tier: "laptop", power: true, os: "win", host: "", user: "", pass: "" },
-  { name: "ITX", tier: "itx", power: true, os: "win", host: "", user: "", pass: "" },
-  { name: "mATX", tier: "matx", power: true, os: "win", host: "", user: "", pass: "" },
-  { name: "ATX", tier: "atx", power: true, os: "win", host: "", user: "", pass: "" },
-  { name: "E-ATX", tier: "eatx", power: true, os: "win", host: "", user: "", pass: "" },
-  { name: "NAS", tier: "nas", power: true, os: "linux", host: "", user: "", pass: "" },
-  { name: "交换机", tier: "switch", power: true, os: "linux", host: "", user: "", pass: "" },
-  { name: "路由器", tier: "router", power: true, os: "linux", host: "", user: "", pass: "" },
+  { name: "笔记本", tier: "laptop", zone: "", power: true, os: "win", host: "", user: "", pass: "" },
+  { name: "ITX", tier: "itx", zone: "", power: true, os: "win", host: "", user: "", pass: "" },
+  { name: "mATX", tier: "matx", zone: "", power: true, os: "win", host: "", user: "", pass: "" },
+  { name: "ATX", tier: "atx", zone: "", power: true, os: "win", host: "", user: "", pass: "" },
+  { name: "E-ATX", tier: "eatx", zone: "", power: true, os: "win", host: "", user: "", pass: "" },
+  { name: "NAS", tier: "nas", zone: "", power: true, os: "linux", host: "", user: "", pass: "" },
+  { name: "交换机", tier: "switch", zone: "", power: true, os: "linux", host: "", user: "", pass: "" },
+  { name: "路由器", tier: "router", zone: "", power: true, os: "linux", host: "", user: "", pass: "" },
 ];
 
-// 只认这七个字段，字符串截断、布尔归一，档位不在表里就退回 mATX——配置文件被人手改过也不能把页面搞崩
+// 只认这八个字段，字符串截断、布尔归一，档位不在表里就退回 mATX——配置文件被人手改过也不能把页面搞崩
 // ⚠ pass 是明文口令：2026-09-23 你明确说"可以先写进配置文件"，所以这里收 pass 字段。
 //    这个文件因此变成敏感文件：不要拷进仓库、不要进分享包、不要截图外传。
 function normalize(list) {
@@ -38,6 +40,7 @@ function normalize(list) {
     out.push({
       name: s(it.name, 24) || "(未命名)",
       tier: TIERS.has(it.tier) ? it.tier : "matx",
+      zone: ZONES.has(it.zone) ? it.zone : "",
       power: it.power !== false,
       os: s(it.os, 8) === "linux" ? "linux" : "win",
       host: s(it.host, 64),

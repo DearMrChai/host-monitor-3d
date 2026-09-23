@@ -194,6 +194,10 @@
   .lbl i.lv-IDLE { color: #7ee2a8; }
   .lbl i.lv-ACTIVE { color: #ffd75e; }
   .lbl i.lv-ALERT { color: #f85149; }
+  /* 区名：地名，不是门牌 —— 比设备标注弱一档，且不吃鼠标事件 */
+  .zlbl { position: fixed; left: 0; top: 0; z-index: 1; pointer-events: none;
+    font-size: 11px; letter-spacing: .18em; color: #6e8296; white-space: nowrap;
+    text-shadow: 0 0 8px rgba(13,17,23,.9); }
   #status { position: fixed; inset: 0; z-index: 9; display: none; place-items: center;
     padding: 28px; text-align: center; background: #0d1117; }
 </style>
@@ -767,7 +771,8 @@ const TIERS = [
 const tierOf = (k) => TIERS.find((t) => t.key === k);
 
 let seq = 0;
-const mkDev = (short, tier) => ({ id: ++seq, short, tier, power: true, os: "win", host: "", user: "", pass: "" });
+// zone 空串 = 按档位自动落区；填了就是手动指定（下拉里那格）
+const mkDev = (short, tier) => ({ id: ++seq, short, tier, zone: "", power: true, os: "win", host: "", user: "", pass: "" });
 // file:// 打开（连不上配置文件）时用的内置默认，和 serve.mjs 首次生成的 设备清单.json 一致
 let devices = [
   mkDev("笔记本", "laptop"), mkDev("ITX", "itx"), mkDev("mATX", "matx"),
@@ -777,7 +782,30 @@ let devices = [
 
 // 间距：地面格子 250 mm 一格（GridHelper 24000/96）。
 // 2140 让 mATX↔ATX 这一对的净空正好 5 格（原来 2400 = 6 格，你量到的那个）。
+// 分区之后这个数只在"区里没有对应布局"时兜底用，实际摆位见下面 layoutZones()。
 const SPACING = 2140;
+
+// ---------- 四个区：地图上各自聚集一堆 ----------
+// 区不新增档位，也不改几何：档位决定"用哪套模型"，区只决定"摆在地图哪一角"。
+// 默认按档位落区（ZONE_OF_TIER），设备行里那一格下拉可以逐台改写（d.zone 非空 = 手动指定）。
+const ZONES = [
+  { key: "compute", cn: "算力集群",   at: [-2900, -2500] },
+  { key: "edge",    cn: "终端设备区", at: [ 2900, -2500] },
+  { key: "storage", cn: "储存设备区", at: [-2900,  2500] },
+  { key: "net",     cn: "网络设备区", at: [ 2900,  2500] },
+];
+const ZONE_OF_TIER = {
+  itx: "compute", matx: "compute", atx: "compute", eatx: "compute",
+  laptop: "edge", nas: "storage", switch: "net", router: "net",
+};
+const zoneKeyOf = (d) => (ZONES.some((z) => z.key === d.zone) ? d.zone : (ZONE_OF_TIER[d.tier] || "compute"));
+const zoneOf = (d) => ZONES.find((z) => z.key === zoneKeyOf(d));
+// 区内排布：一行最多 3 台、间隔 1400 mm（5.6 格），满了换行。
+// 为什么不是原来那一排的 2140：四台算力按 2140 排就是一堆 6.4 m 宽，四堆摆一起地图要 14 m，
+// 全景退到那个量级机器又变灰点了。要更疏/回到 2140，只改这两个常量。
+const CLUSTER_SPACING = 1400;
+const CLUSTER_ROW_GAP = 1800;
+const CLUSTER_PER_ROW = 3;
 const OS_LABEL = { win: "Windows", linux: "Linux" };
 
 // 机身件走受光材质；屏幕 / 屏幕内容 / 电源灯走不受光材质，这样"亮"看起来是自己发光。
@@ -875,14 +903,14 @@ function dropStation(h) {
   h.div.remove();
 }
 
-// 按 devices 重造场景里那一排（台数、左右次序、每台是哪档全部跟着列表走）
+// 按 devices 重造这张地图：台数 / 次序 / 档位 / 落区全部跟着列表走，不存在第二份名单
 function rebuild() {
   for (const h of holders) dropStation(h);
-  holders = devices.map((d, i) => {
+  clearZoneMarks();
+  const built = devices.map((d) => {
     const model = paint(tierOf(d.tier).make());
     const holder = new THREE.Group();
     holder.add(model);
-    holder.position.set((i - (devices.length - 1) / 2) * SPACING, 0, 0);
     scene.add(holder);
 
     const bb = new THREE.Box3().setFromObject(model);
@@ -907,16 +935,73 @@ function rebuild() {
     document.body.appendChild(div);
 
     return { id: d.id, holder, model, div, b, stateLine, parts: collectParts(model), upH: size.y,
-      stag: (i % 2) * -50,   // 奇数条往上错一行，八台也不会糊成一坨
-      footR: Math.max(msz.x, msz.z) * 0.5, x: holder.position.x, z: holder.position.z };
+      stag: 0, zone: zoneKeyOf(d), hw: size.x / 2, hd: size.z / 2, x: 0, z: 0,
+      footR: Math.max(msz.x, msz.z) * 0.5 };
   });
+  layoutClusters(built);
+  for (const h of built) h.holder.position.set(h.x, 0, h.z);
+  holders = built;
+  drawZoneMarks(built);
   for (const d of devices) applyState(d);
-  fitOverview();   // 台数变了 → 全景取景跟着重算（函数声明在后面，靠提升拿到）
+  fitOverview();
+}
+
+// 区内聚成一堆：一行最多 CLUSTER_PER_ROW 台、满了换行，每行各自居中到区中心。
+// 标注错行仍然按列表序奇偶来（同一行里两台机器的名字不能叠在一起）。
+function layoutClusters(built) {
+  for (const z of ZONES) {
+    const mine = built.filter((h) => h.zone === z.key);
+    const rows = Math.max(1, Math.ceil(mine.length / CLUSTER_PER_ROW));
+    mine.forEach((h, i) => {
+      const row = Math.floor(i / CLUSTER_PER_ROW);
+      const col = i % CLUSTER_PER_ROW;
+      const inRow = Math.min(CLUSTER_PER_ROW, mine.length - row * CLUSTER_PER_ROW);
+      h.x = z.at[0] + (col - (inRow - 1) / 2) * CLUSTER_SPACING;
+      h.z = z.at[1] + (row - (rows - 1) / 2) * CLUSTER_ROW_GAP;
+    });
+  }
+  built.forEach((h, i) => { h.stag = (i % 2) * -50; });
+}
+
+// 每个区画一圈地面框 + 一块区名：没有这两样，"分了区"在屏幕上是不成立的，
+// 只有四堆机器各自挨着，看不出那是四个区还是摆歪了。
+let zoneMarks = [];
+function clearZoneMarks() {
+  for (const m of zoneMarks) {
+    scene.remove(m.line);
+    m.line.geometry.dispose();
+    m.line.material.dispose();
+    m.div.remove();
+  }
+  zoneMarks = [];
+}
+function drawZoneMarks(built) {
+  const pad = 420;   // 框离机器留 420 mm，别贴着
+  for (const z of ZONES) {
+    const mine = built.filter((h) => h.zone === z.key);
+    if (!mine.length) continue;
+    const minX = Math.min(...mine.map((h) => h.x - h.hw)) - pad;
+    const maxX = Math.max(...mine.map((h) => h.x + h.hw)) + pad;
+    const minZ = Math.min(...mine.map((h) => h.z - h.hd)) - pad;
+    const maxZ = Math.max(...mine.map((h) => h.z + h.hd)) + pad;
+    const g = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(minX, 1, minZ), new THREE.Vector3(maxX, 1, minZ),
+      new THREE.Vector3(maxX, 1, maxZ), new THREE.Vector3(minX, 1, maxZ),
+    ]);
+    const line = new THREE.LineLoop(g, new THREE.LineBasicMaterial({ color: 0x303b47 }));
+    line.name = "zone-frame";
+    scene.add(line);
+    const div = document.createElement("div");
+    div.className = "zlbl";
+    div.textContent = z.cn + " · " + mine.length + " 台";
+    document.body.appendChild(div);
+    zoneMarks.push({ line, div, at: new THREE.Vector3((minX + maxX) / 2, 1, maxZ + 300) });
+  }
 }
 
 // ---------- 有凭据的设备走 SSH 抓一帧，没有的继续用模拟数据 ----------
 // 判据只有一条：地址 + 用户名 + 密码 三格都填了才算"可采"。缺任何一个 → 模拟。
-// 密码不进配置文件（见上面的清单文件说明），所以刷新后要么重新输一次，要么这一台回到模拟态。
+// 三格（含明文密码）都落进同目录 设备清单.json，见 docs/本地服务与数据源.md §七。
 const tipEl = document.getElementById("tip");
 const liveOf = (d) => !!(d.host && d.user && d.pass);
 const srcTag = (d) => (!liveOf(d) ? "模拟" : d.frame ? "实测" : d.probeErr ? "抓不到" : "待抓");
@@ -2020,6 +2105,7 @@ function renderList() {
     const pwChip = el("span", "chip" + (d.power ? " set" : ""), d.power ? "● 开机" : "○ 关机");
     d.pwChip = pwChip;
     const addrChip = el("span", "chip" + (d.host ? " set" : ""), d.host || "未填地址");
+    const zoneChip = el("span", "chip", zoneOf(d).cn);   // 折叠行上直接看得见落在哪个区
     const ops = el("div", "ops");
     const loc = mini("◎", "在屏幕上定位这台并打开它的性能看板（交换机/路由器只有几十毫米高，"
       + "一排八台的画面里用鼠标点 3D 基本点不中，所以列表里给一个直达的）");
@@ -2039,7 +2125,7 @@ function renderList() {
       sync();
     });
     ops.append(loc, up, dn, del);
-    sum.append(el("span", "caret"), sumName, tierChip, pwChip, addrChip, el("span", "grow"), ops);
+    sum.append(el("span", "caret"), sumName, tierChip, zoneChip, pwChip, addrChip, el("span", "grow"), ops);
 
     const body = el("div", "dbody");
     const nm = textField("text", d.short, "设备名", (v) => {
@@ -2060,6 +2146,15 @@ function renderList() {
     }
     tier.value = d.tier;
     tier.addEventListener("change", () => { d.tier = tier.value; sync(); });
+
+    const zone = el("select", "tier");
+    zone.title = "这台落在哪个区（默认跟着档位走，改了就手动钉住）";
+    for (const z of [{ key: "", cn: "自动（按档位）" }].concat(ZONES)) {
+      const o = document.createElement("option");
+      o.value = z.key; o.textContent = z.cn; zone.add(o);
+    }
+    zone.value = d.zone || "";
+    zone.addEventListener("change", () => { d.zone = zone.value; sync(); });
 
     const line = el("div", "line");
     const pw = el("button", "pw");
@@ -2108,6 +2203,7 @@ function renderList() {
     body.append(
       fieldRow("名称", nm),
       fieldRow("档位", tier),
+      fieldRow("分区", zone),
       fieldRow("状态", line),
       fieldRow("连接地址", host),
       fieldRow("用户名", user),
@@ -2285,7 +2381,8 @@ async function loadDevices() {
       mkDev(String(it.name || "(未命名)"), TIERS.some((t) => t.key === it.tier) ? it.tier : "matx"),
       { power: it.power !== false, os: it.os === "linux" ? "linux" : "win",
         host: typeof it.host === "string" ? it.host : "", user: typeof it.user === "string" ? it.user : "",
-        pass: typeof it.pass === "string" ? it.pass : "" }
+        pass: typeof it.pass === "string" ? it.pass : "",
+        zone: ZONES.some((z) => z.key === it.zone) ? it.zone : "" }
     ));
     cfgMode = "文件";
   } catch (e) {
@@ -2352,8 +2449,10 @@ function moveTo(t, d) {
 }
 function overview() { moveTo(OVERVIEW.target, OVERVIEW.dist); hidePerf(); pinLabel(null); }
 
-// 全景距离不是写死的：一排有几台是用户说了算（增删设备 / 换档都会改台数），
-// 所以每次重造那一排就按当前实际跨度重算一遍 —— 否则加到 8 台时最左最右就切在画面外。
+// 全景距离按"当前这张地图"实算，但有一条上限：台数加多不能一路退到机器变灰点。
+// 分区之后地图是二维摊开的（实测左右 8.9 m × 前后 6.6 m），所以横向按包围球半径算 ——
+// 宁可保守也别切掉一个区。上限 12500 是"四个区一眼看全"的量级，再远就不如滚轮自己拉。
+const MAX_READABLE = 12500;
 function fitOverview() {
   if (!holders.length) return;
   const b = new THREE.Box3();
@@ -2361,12 +2460,12 @@ function fitOverview() {
   const size = b.getSize(new THREE.Vector3());
   const center = b.getCenter(new THREE.Vector3());
   const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
-  const dH = (size.x / 2) / (tanV * camera.aspect);            // 让整排的左右都进画面
+  const r = b.getBoundingSphere(new THREE.Sphere()).radius;
+  const dH = r / (tanV * camera.aspect);                        // 让四个区横着都进画面
   const dV = (size.y / 2 + Math.abs(center.y - OVERVIEW.target.y)) / tanV; // 让最高的那台上下都进画面
-  OVERVIEW.dist = Math.min(30000, Math.max(1500, Math.max(dH, dV) * 1.18)); // 1.18 = 给头顶那行标注留余量
+  OVERVIEW.dist = Math.min(MAX_READABLE, Math.max(1500, Math.max(dH, dV) * 1.18));
   OVERVIEW.target.set(center.x, Math.max(300, center.y), center.z);
-  // 雾的起止跟着全景距离走：写死 20000 起雾的话，台数一多整排会被"吞进黑里"，
-  // 那不是层次，是看不见。
+  // 雾的起止跟着全景距离走：写死 20000 起雾的话，地图一摊开整片会被"吞进黑里"，那不是层次，是看不见。
   scene.fog.near = OVERVIEW.dist * 1.15;
   scene.fog.far = OVERVIEW.dist * 2.4;
 }
@@ -2441,6 +2540,9 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
     + ((loads.get(d.id) || {}).key || "-") + "|" + ((loads.get(d.id) || {}).pct || 0).toFixed(0) + "%"),
   pulseSettings: () => ({ ...PULSE_SETTINGS, intervalMs: MONITOR_SETTINGS.intervalMs }),
   pulseLabels: () => holders.map((h) => h.stateLine.textContent + " [" + h.stateLine.className + "]"),
+  // 分区读数：每台落在哪个区、区框在地面的范围、全景距离
+  zones: () => devices.map((d) => d.short + "→" + zoneOf(d).cn + (d.zone ? "(手动)" : "(自动)")),
+  zoneMarks: () => zoneMarks.map((m) => m.div.textContent),
 });
 
 document.getElementById("reset").addEventListener("click", () => {
@@ -2529,6 +2631,14 @@ function tick() {
     h.div.style.transform = "translate(-50%,-100%) translate("
       + ((proj.x * 0.5 + 0.5) * window.innerWidth).toFixed(1) + "px,"
       + ((-proj.y * 0.5 + 0.5) * window.innerHeight + h.stag).toFixed(1) + "px)";
+  }
+  for (const m of zoneMarks) {   // 区名跟着地图走，跟设备标注同一套投影
+    proj.copy(m.at).project(camera);
+    if (proj.z > 1) { m.div.style.display = "none"; continue; }
+    m.div.style.display = "block";
+    m.div.style.transform = "translate(-50%,-50%) translate("
+      + ((proj.x * 0.5 + 0.5) * window.innerWidth).toFixed(1) + "px,"
+      + ((-proj.y * 0.5 + 0.5) * window.innerHeight).toFixed(1) + "px)";
   }
   renderer.render(scene, camera);
 }
