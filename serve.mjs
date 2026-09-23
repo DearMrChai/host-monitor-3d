@@ -1,6 +1,8 @@
 // 原型本地服务：把设备清单存成同目录的 设备清单.json、分区表存成 分区.json、设置存成 设置.json，
-// 页面上的编辑实时写回这三个文件。零依赖，node 22 直接跑；只监听 127.0.0.1。
+// 页面上的编辑实时写回这三个文件。零依赖，node 22 直接跑。
 //   node serve.mjs            → http://127.0.0.1:8123/monitor-wall.html
+//   HM_BIND=0.0.0.0 HM_ALLOW=10.226.127.14 node serve.mjs
+//        → 也从别的机器能开（那台自己没屏幕时用），并且只认 HM_ALLOW 里那几个来源
 // 为什么要有它：file:// 下浏览器不能写盘，"编辑同步修改配置文件"必须走一次本地 HTTP。
 import { createServer } from "node:http";
 import { readFile, writeFile, rename, appendFile } from "node:fs/promises";
@@ -13,6 +15,21 @@ const FILE = path.join(DIR, "设备清单.json");
 const ZFILE = path.join(DIR, "分区.json");
 const SFILE = path.join(DIR, "设置.json");
 const PORT = Number(process.env.PORT || 8123);
+// 默认只认环回：这块墙看得见设备清单里的明文口令，别顺手把它摊到网段上。
+// 要敞开时（比如那台机器自己没屏幕）用 HM_BIND 指定，并且**必须**同时用防火墙把来源收到信得过的
+// 那几台机器上 —— 这个服务不做鉴权，能连上的人就等于能读走整份清单、也能借它往任意主机打 SSH。
+const BIND = process.env.HM_BIND || "127.0.0.1";
+const LOOPBACK = BIND === "127.0.0.1" || BIND === "localhost" || BIND === "::1";
+// 允许从哪些机器连（逗号分隔的 IP，环回永远放行；不给＝不限制）。
+// 为什么这道检查必须在服务里做、不能只靠防火墙：138 那台的 Windows 防火墙三个 profile 全是关的
+// （实测 Enabled=False），规则加上去也不会挡谁。而这个服务不做鉴权 —— 能连上的人就能读走整份
+// 设备清单（含明文口令），也能借 /api/probe 往任意主机打 SSH，所以来源得自己认。
+const ALLOW = (process.env.HM_ALLOW || "").split(",").map((s) => s.trim()).filter(Boolean);
+function fromAllowed(req) {
+  if (!ALLOW.length) return true;
+  const ip = String(req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+  return ip === "127.0.0.1" || ip === "::1" || ALLOW.includes(ip);
+}
 const MAX_BYTES = 64 * 1024;
 const TIERS = new Set(["laptop", "matx", "atx", "eatx", "itx", "nas", "switch", "router"]);
 // zone 留空 = 页面按档位自动落区，所以默认清单里全是空串。
@@ -241,10 +258,15 @@ async function logProbe(host, ok, msg) {
   } catch { /* 日志写不进不影响主流程 */ }
 }
 
-// 只允许本机页面调：挡掉别的网站往这个端口上打
+// 只允许页面自己调：挡掉别的网站往这个端口上打。
+// 口径是" Origin 的主机 == 请求打到的 Host "，不是写死 127.0.0.1 —— 写死的话，从
+// http://10.226.127.138:8123 打开的页面发回 /api/probe 时自带 Origin: 10.226.127.138:8123，
+// 会被自己挡掉，症状是"远端页面画得出来、但一台机器的数据都抓不到"。
+// 同源比对仍然是真同源：evil.com 打过来照样 403。
 function sameOrigin(req) {
   const o = req.headers.origin;
-  return !o || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(o);
+  if (!o) return true;
+  try { return new URL(o).host === req.headers.host; } catch { return false; }
 }
 
 // 口令可以为空：办公那几台 Windows 是"账号 user、不设密码"，空口令是它们的正常配置，
@@ -302,8 +324,16 @@ const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; ch
 
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
+  // 来源这道门在最前面：连页面带接口一起挡，不给自己留"页面能开、接口不给"那种半开状态
+  if (!fromAllowed(req)) {
+    return send(res, 403, "这台只对指定来源开放（serve.mjs 的 HM_ALLOW）", "text/plain; charset=utf-8");
+  }
+  // 所有 /api/* 都先过同源这道门：读的那几个口子回的是含口令的清单，写的那几个口子能改清单和设置，
+  // 而跨站请求可以不带预检地打过来（text/plain 的"简单请求"照样被下面 JSON.parse 当 JSON 收下）。
+  if (url.pathname.startsWith("/api/") && !sameOrigin(req)) {
+    return send(res, 403, JSON.stringify({ ok: false, error: "来源不是本机" }));
+  }
   if (url.pathname === "/api/probe") {
-    if (!sameOrigin(req)) return send(res, 403, JSON.stringify({ ok: false, error: "来源不是本机" }));
     if (req.method !== "POST") return send(res, 405, JSON.stringify({ ok: false, error: "只支持 POST" }));
     let raw = "";
     req.on("data", (c) => { raw += c; if (raw.length > 4096) req.destroy(); });
@@ -405,9 +435,13 @@ createServer(async (req, res) => {
   } catch {
     send(res, 404, "not found", "text/plain");
   }
-}).listen(PORT, "127.0.0.1", () => {
-  console.log(`原型服务已起：http://127.0.0.1:${PORT}/monitor-wall.html`);
-  console.log(`设备清单文件：${FILE}（页面编辑会写回这里；只监听 127.0.0.1）`);
+}).listen(PORT, BIND, () => {
+  console.log(`原型服务已起：http://${LOOPBACK ? "127.0.0.1" : BIND}:${PORT}/monitor-wall.html` +
+    (LOOPBACK ? "" : `（也从 http://<本机 IP>:${PORT}/monitor-wall.html 能开）`));
+  console.log(`设备清单文件：${FILE}（页面编辑会写回这里${LOOPBACK ? "；只监听 127.0.0.1" : ""}）`);
   console.log(`分区文件：${ZFILE}`);
   console.log(`设置文件：${SFILE}（改它即改看板，页面每 5 秒读一次；页面里改也写回它）`);
+  console.log(LOOPBACK ? "来源：只认环回（别的机器连不上）"
+    : ALLOW.length ? `来源：只放 ${ALLOW.join(" / ")}（外加环回）`
+    : "⚠ 来源：不限制 —— 绑在非环回地址上又没给 HM_ALLOW，同网段谁能连上谁就能读走整份设备清单（含口令）");
 });

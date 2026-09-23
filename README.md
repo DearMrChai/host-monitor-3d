@@ -29,15 +29,29 @@ npm start              # http://127.0.0.1:8123/monitor-wall.html
 `设备清单.json` 含明文口令，是拷过去的那一份里唯一敏感的东西 —— 别转发、别截图。
 
 Windows 上当看板那台要注意一件事：**在 SSH 会话里直接起 `node serve.mjs`，会话一断进程就跟着被收走**
-（现象是浏览器里 `ERR_CONNECTION_REFUSED`，日志停在启动那几行）。要让它活下来得让 WMI 去建进程：
+（现象是浏览器里 `ERR_CONNECTION_REFUSED`，日志停在启动那几行）。要让它活下来得让 WMI 去建进程，或者
+干脆交给计划任务（见下）。另开一个会话查 `netstat -ano | findstr 8123` 能看到 LISTENING 才算真起来了。
+
+**那台机器自己没屏幕 / 要从别的机器看**：带两个环境变量起，`HM_BIND=0.0.0.0`（不再只绑环回）＋
+`HM_ALLOW=<你那台的 IP>`（只认这几个来源，环回永远放行）。**这两个要一起给**：服务不做鉴权，
+能连上的人就能读走整份 `设备清单.json`（含明文口令），也能借 `/api/probe` 往任意主机打 SSH。
+**别指望防火墙替你挡**——比如 138 那台的 Windows 防火墙三个 profile 全是关的（实测 `Enabled=False`），
+规则加上去也拦不住谁，所以来源这道门只能服务自己认。不给 `HM_ALLOW` 时启动日志里会写一行"来源：不限制"的空心警告。
 
 ```powershell
-$line = 'cmd.exe /c cd /d "C:\看板目录" && node serve.mjs >> "C:\看板目录\服务日志.txt" 2>&1'
-Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $line }
+# 开机自启：计划任务跑一个"起看板.ps1"，脚本里先收掉旧实例（按命令行带 serve.mjs 找）再起新的。
+# 动作里头用 cmd 的 set "VAR=值"（写成 set VAR=值 && … 会把 && 前的空格算进值里，node 会报
+# getaddrinfo ENOTFOUND 0.0.0.0）；起进程走 WMI，否则任务一结束进程就被收走。
+$act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\Users\User\hm3d\起看板.ps1"'
+$trg = New-ScheduledTaskTrigger -AtStartup; $trg.Delay = 'PT30S'
+$set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+  -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName 'hm3d-monitor-wall' -Action $act -Trigger $trg -Settings $set `
+  -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest) -Force
 ```
 
-另开一个会话查 `netstat -ano | findstr 127.0.0.1:8123` 能看到 LISTENING 才算真起来了。
-**没有做开机自启**：那台上的墙在它重启后不会自己回来，得再起一次（要自启就自己加一条计划任务）。
+任务以 SYSTEM 跑，它建出来的文件属主是 SYSTEM；给那个账号补一次目录权限，否则以后从外网 SFTP 覆盖
+`设置.json` / `探测记录.log` 会被拒：`icacls C:\Users\User\hm3d /grant "user:(OI)(CI)F" /T`。
 
 ## 两页各管什么
 

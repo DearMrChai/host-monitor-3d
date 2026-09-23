@@ -3044,7 +3044,7 @@ let booted = false;
 function setCfgLine() {
   cfgLine.textContent = cfgMode === "文件"
     ? "清单已接到本地文件 " + CFG_FILE + " · 编辑即写回" + (cfgLast ? "（最近 " + cfgLast + "）" : "")
-    : "没连上本地文件（现在是 file:// 打开？）：编辑只在内存里，刷新即丢。要落盘请跑 node serve.mjs，再开 http://127.0.0.1:8123/";
+    : "没连上本地文件（现在是 file:// 打开？）：编辑只在内存里，刷新即丢。要落盘请跑 node serve.mjs，再开 http://127.0.0.1:8123/（换成这台机子的 IP 也行，跑服务时带 HM_BIND=0.0.0.0）";
 }
 function toFileList() {
   return devices.map((d) => ({ name: d.short, tier: d.tier, zone: d.zone, power: d.power, os: d.os,
@@ -3113,7 +3113,7 @@ let zTimer = 0;
 function setZLine() {
   zLine.textContent = zMode === "文件"
     ? "分区表已接到本地文件 " + ZONE_FILE + "（改一次才生成）· 改名 / 挪位 / 增删即写回"
-    : "没连上本地文件（现在是 file:// 打开？）：分区改动只在内存里，刷新即丢。要落盘请跑 node serve.mjs，再开 http://127.0.0.1:8123/";
+    : "没连上本地文件（现在是 file:// 打开？）：分区改动只在内存里，刷新即丢。要落盘请跑 node serve.mjs，再开 http://127.0.0.1:8123/（换成这台机子的 IP 也行，跑服务时带 HM_BIND=0.0.0.0）";
 }
 const zonesToFile = () => ZONES.map((z) => ({ key: z.key, cn: z.cn, at: z.at }));
 async function saveZones() {
