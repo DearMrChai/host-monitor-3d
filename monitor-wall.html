@@ -1,0 +1,2546 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Host Monitor · 监控墙（原型）</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1117; color: #c9d1d9;
+    font: 13px/1.55 system-ui, "Microsoft YaHei", sans-serif; }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #bar { position: fixed; left: 0; right: 0; top: 0; height: 40px; z-index: 6; display: flex;
+    align-items: center; gap: 10px; padding: 0 12px; background: #0d1117; border-bottom: 1px solid #30363d; }
+  #bar .brand { font-size: 14px; font-weight: 600; letter-spacing: .05em; color: #e6edf3; }
+  #bar .tag { font-size: 11px; opacity: .5; }
+  #bar .fill { flex: 1; }
+  #gear { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 7px; }
+  #gear.on { border-color: #4a5563; background: #1c222a; }
+  #hud { position: fixed; left: 12px; top: 52px; z-index: 2; max-width: 420px; pointer-events: none; }
+  #hud p { margin: 0; opacity: .72; }
+  #btns { position: fixed; left: 12px; bottom: 12px; z-index: 3; display: flex; gap: 8px; }
+  button { background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
+    padding: 6px 10px; font: 12px system-ui, "Microsoft YaHei", sans-serif; cursor: pointer; }
+  button:hover { border-color: #4a5563; }
+
+  #mask { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center;
+    background: rgba(4,7,11,.66); }
+  /* 作者写的 display:grid 会盖掉 UA 的 [hidden]{display:none}，不补这行弹窗永远挡在画面上 */
+  #mask[hidden] { display: none; }
+  #dlg { width: min(660px, calc(100vw - 32px)); max-height: calc(100vh - 64px); display: flex;
+    flex-direction: column; background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+    box-shadow: 0 18px 48px rgba(1,4,9,.6); }
+  #dlg .dh { display: flex; align-items: center; gap: 10px; padding: 10px 12px; flex: none;
+    border-bottom: 1px solid #30363d; font-size: 13px; font-weight: 600; color: #e6edf3; }
+  #dlg .db { display: flex; min-height: 0; }
+  #dlg .rail { flex: none; width: 122px; padding: 8px 0; border-right: 1px solid #21262d;
+    overflow-y: auto; }
+  #dlg .rail button { display: block; width: 100%; text-align: left; border: 0; border-radius: 0;
+    background: none; padding: 7px 12px; font-size: 12px; color: #8b949e; }
+  #dlg .rail button.on { color: #e6edf3; background: #1c232c; box-shadow: inset 2px 0 #58a6ff; }
+  #dlg .pane { display: none; flex: 1; min-width: 0; padding: 10px 12px 12px; overflow-y: auto; }
+  #dlg .pane.on { display: block; }
+  #dlg .ph { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  #dlg .ph b { font-size: 12px; color: #e6edf3; font-weight: 600; }
+  #dlg .cnt { font-size: 11px; color: #8b949e; }
+  .fine { margin: 10px 0 0; font-size: 11px; opacity: .6; line-height: 1.5; }
+
+  /* 设置弹窗里的滑杆行：标签 + 当前值 + 滑杆 + 一句人话说明 */
+  .sld { display: grid; gap: 3px; margin: 12px 0 0; padding-bottom: 10px;
+    border-bottom: 1px solid #21262d; }
+  .sld .lab { display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: #c9d1d9; }
+  .sld .lab b { margin-left: auto; color: #e6edf3; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .sld input[type="range"] { width: 100%; height: 18px; accent-color: #58a6ff; cursor: pointer; }
+  .sld .hint { font-size: 10.5px; color: #6e7681; line-height: 1.5; }
+
+  .ops { display: flex; gap: 5px; align-items: center; margin-left: auto; }
+  button.pw { padding: 4px 9px; font-size: 12px; color: #8b949e; }
+  button.pw.on { color: #7ee2a8; border-color: #2ea043; background: #10241a; }
+  button.mini { padding: 3px 7px; font-size: 12px; line-height: 1.2; color: #8b949e; }
+  button.mini[disabled] { opacity: .35; cursor: default; }
+  button.del { color: #f85149; }
+  select.os, select.tier { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
+    border-radius: 5px; padding: 3px 4px; font: 11px system-ui, "Microsoft YaHei", sans-serif; cursor: pointer; }
+  select.tier { max-width: 100%; }
+
+  /* 设备列表：一台一个折叠，同一时刻只展开正在编辑的那台 */
+  details.dev { border-top: 1px solid #21262d; }
+  details.dev:first-of-type { border-top: 0; }
+  details.dev > summary { display: flex; align-items: center; gap: 8px; padding: 7px 2px; cursor: pointer;
+    list-style: none; font-size: 12px; color: #c9d1d9; }
+  details.dev > summary::-webkit-details-marker { display: none; }
+  .caret::before { content: "▸"; font-size: 9px; color: #6e7681; }
+  details.dev[open] > summary .caret::before { content: "▾"; color: #58a6ff; }
+  .sumName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip { font-size: 10px; color: #6e7681; border: 1px solid #21262d; border-radius: 4px; padding: 0 5px;
+    white-space: nowrap; }
+  .chip.set { color: #7ee2a8; border-color: #1f3a2c; }
+  .chip.real { color: #7ee2a8; border-color: #1f3a2c; }
+  .chip.sim { color: #8b949e; }
+  .chip.bad { color: #f85149; border-color: #4a1d1d; }
+
+  #tip { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 10;
+    width: min(460px, calc(100vw - 32px)); max-height: 70vh; overflow-y: auto; padding: 12px 14px;
+    background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+    box-shadow: 0 18px 48px rgba(1,4,9,.6); scrollbar-width: none; }
+  #tip::-webkit-scrollbar { width: 0; }
+  #tip .th { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  #tip .th b { font-size: 13px; color: #e6edf3; }
+  #tip .st { font-size: 11px; padding: 1px 7px; border-radius: 5px; }
+  #tip .st.ok { color: #7ee2a8; background: #10241a; border: 1px solid #2ea043; }
+  #tip .st.no { color: #f85149; background: #2a1214; border: 1px solid #f85149; }
+  #tip .err { font-size: 12px; color: #f85149; line-height: 1.6; }
+  #tip table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #tip td { padding: 5px 4px; border-top: 1px solid #21262d; color: #8b949e; }
+  #tip td:first-child { width: 40%; }
+  #tip td b { color: #e6edf3; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #tip td.bad, #tip td.bad b { color: #f85149; }
+  #tip .fine { margin-top: 8px; font-size: 10.5px; color: #6e7681; line-height: 1.55; }
+  button.test { color: #58a6ff; border-color: #1f3a5c; }
+  .dbody { padding: 0 2px 10px 19px; display: grid; gap: 7px; }
+  .fld { display: grid; grid-template-columns: 60px 1fr; gap: 8px; align-items: center; }
+  .fld > span { font-size: 11px; color: #8b949e; }
+  .fld .line { display: flex; gap: 5px; align-items: center; }
+  input.tx { width: 100%; box-sizing: border-box; background: #0d1117; color: #c9d1d9;
+    border: 1px solid #30363d; border-radius: 5px; padding: 4px 6px; font: 12px system-ui, "Microsoft YaHei", sans-serif; }
+  input.tx:disabled { opacity: .45; }
+  input[type=password] { font-family: ui-monospace, Consolas, monospace; letter-spacing: .14em; }
+  .netnote { font-size: 10.5px; color: #6e7681; line-height: 1.55; }
+
+  /* 双击聚焦后右侧的性能看板。故意不给 #perf 写 display，[hidden] 才压得住（弹窗那边刚踩过这个坑） */
+  #perf { position: fixed; right: 12px; top: 52px; z-index: 5; width: 326px; max-height: calc(100vh - 66px);
+    box-sizing: border-box; overflow-y: auto; padding: 10px 11px 11px;
+    background: rgba(13,17,23,.93); border: 1px solid #30363d; border-radius: 9px;
+    scrollbar-width: none; -ms-overflow-style: none; }
+  #perf::-webkit-scrollbar { width: 0; height: 0; }
+  #perf h3 { margin: 0; font-size: 12px; color: #e6edf3; }
+  #perf .sub { margin: 2px 0 4px; font-size: 11px; color: #8b949e; }
+  #perf .ph2 { display: flex; align-items: center; gap: 8px; }
+  /* 左缘那条竖柄 = 拖宽度；滚条已经藏了，滚动照旧用滚轮/触控板 */
+  #perfGrip { position: absolute; left: -5px; top: 0; bottom: 0; width: 10px; cursor: col-resize; touch-action: none; }
+  #perfGrip::after { content: ""; position: absolute; left: 4px; top: 10px; bottom: 10px; width: 2px;
+    border-radius: 2px; background: #21262d; }
+  #perf.dragging #perfGrip::after { background: #58a6ff; }
+
+  .sect { padding: 8px 0; border-top: 1px solid #1c222a; }
+  .shead { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
+  .sname { font-size: 11px; letter-spacing: .04em; color: #8b949e; }
+  .cname { font-size: 10.5px; color: #8b949e; }
+  .vbtn { padding: 2px 7px; font-size: 10px; line-height: 1.5; border-radius: 5px; }
+  .vbtn.on { color: #e6edf3; border-color: #58a6ff; background: #132a44; }
+  .grid { display: grid; gap: 5px; }
+  /* 一行最多 4 个：列宽不低于内容区的 1/4，也不低于 78px（栏拖窄了就自己退到 3/2 列） */
+  .grid.dense { grid-template-columns: repeat(auto-fill, minmax(max(78px, calc((100% - 15px) / 4)), 1fr)); }
+  .grid.solo { grid-template-columns: 1fr; }
+
+  .cstat { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-bottom: 7px; }
+  .cstat > div { padding: 6px 7px; background: #0d1117; border: 1px solid #21262d; border-radius: 7px; }
+  .cstat .k { font-size: 10px; color: #6e7681; white-space: nowrap; }
+  .cstat .v { margin-top: 3px; font-size: 15px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .cstat .v.sm { font-size: 11.5px; font-weight: 600; }
+  .cstat .u, .bigno .u { font-size: 10px; font-weight: 500; color: #6e7681; margin-left: 2px; }
+
+  .core { position: relative; padding: 6px 7px; background: #0d1117; border: 1px solid #21262d;
+    border-radius: 7px; cursor: pointer; }
+  .core:hover { border-color: #3d444d; }
+  .core.sel { border-color: #58a6ff; box-shadow: inset 0 0 0 1px #58a6ff; }
+  .chead { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .ctag { font-size: 9px; font-weight: 700; padding: 0 4px; border-radius: 4px; background: #21262d; color: #8b949e; }
+  .ctag.p { background: #132a44; color: #7fb0ff; }
+  .ctag.e { background: #12261a; color: #6fd39a; }
+  .bigno { display: flex; align-items: baseline; margin: 2px 0 4px; }
+  .bigno b { font-size: 17px; font-weight: 650; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .io { display: grid; grid-template-columns: 46px 1fr auto; gap: 6px; align-items: center; margin-top: 3px; }
+  .io .k { font-size: 10px; color: #6e7681; white-space: nowrap; }
+  .io .v { font-size: 10px; color: #c9d1d9; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bar { height: 3px; border-radius: 2px; background: #21262d; overflow: hidden; min-width: 18px; }
+  .bar > i { display: block; height: 100%; width: 0; border-radius: 2px;
+    transition: width .45s ease, background .45s ease; }
+  .sub2 { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 5px; font-size: 9.5px; color: #6e7681; }
+  .sub2 b { color: #c9d1d9; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .miniSpark { margin-top: 4px; }
+  .miniSpark svg { display: block; width: 100%; height: 26px; }
+
+  .heat { display: grid; grid-template-columns: repeat(auto-fill, minmax(26px, 1fr)); gap: 4px; }
+  .hc { aspect-ratio: 1 / 1; display: grid; place-items: center; border-radius: 5px; font-size: 10px;
+    font-weight: 600; color: rgba(255,255,255,.92); cursor: pointer; user-select: none;
+    transition: background .45s ease, opacity .45s ease, transform .12s; }
+  .hc:hover { transform: scale(1.14); outline: 1px solid rgba(255,255,255,.3); }
+  .hc.sel { outline: 2px solid #58a6ff; }
+
+  .sumbar { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; padding: 6px 8px;
+    border: 1px dashed #30363d; border-radius: 7px; font-size: 10.5px; color: #8b949e; }
+  .sumbar .t { color: #c9d1d9; font-weight: 600; }
+  .sumbar b { color: #e6edf3; font-variant-numeric: tabular-nums; }
+  .drk { margin-top: 6px; padding: 7px 8px; background: #0d1117; border: 1px solid #21262d; border-radius: 7px; }
+  .drk svg { display: block; width: 100%; height: 42px; }
+  .drow { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; font-size: 10.5px; color: #8b949e; }
+  .drow b { color: #e6edf3; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+  .thr { display: grid; grid-template-columns: 46px 1fr 34px; gap: 6px; align-items: center;
+    margin-top: 5px; font-size: 10px; color: #8b949e; }
+  .thr .tv { text-align: right; color: #8b949e; font-variant-numeric: tabular-nums; }
+  .shead .grow, #dlg .grow, #perf .grow { flex: 1; }
+  .mfoot { margin-top: 4px; font-size: 11px; color: #6e7681; font-variant-numeric: tabular-nums; }
+
+  .lbl { position: fixed; left: 0; top: 0; z-index: 2; padding: 4px 8px; white-space: nowrap;
+    background: rgba(13,17,23,.84); border: 1px solid #30363d; border-radius: 6px; pointer-events: none; }
+  /* 八台一排时标注横向排不下，叠成一坨等于全看不见 —— 所以：
+     名字 + 状态压成一行；包围盒那一行只在"这台被聚焦"时展开（.pin）。
+     不用 :hover 展开：标注是 pointer-events:none 的（否则会把拖视角的鼠标事件吃掉），悬停压根收不到。 */
+  .lbl b { font-size: 12px; color: #e6edf3; }
+  .lbl i { font-size: 11px; font-style: normal; color: #8b949e; margin-left: 6px; }
+  .lbl span { display: none; font-size: 11px; opacity: .82; font-variant-numeric: tabular-nums; }
+  .lbl.pin span { display: block; }
+  .lbl i.on { color: #7ee2a8; }
+  /* 分级直接把颜色写在标注上：不用盯着脚下有没有环，扫一眼名字那行就知道哪台在响 */
+  .lbl i.lv-IDLE { color: #7ee2a8; }
+  .lbl i.lv-ACTIVE { color: #ffd75e; }
+  .lbl i.lv-ALERT { color: #f85149; }
+  #status { position: fixed; inset: 0; z-index: 9; display: none; place-items: center;
+    padding: 28px; text-align: center; background: #0d1117; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.170.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="bar">
+  <span class="brand">Host Monitor</span>
+  <span class="tag">监控墙原型 · 未接入插件</span>
+  <span class="fill"></span>
+  <button id="gear" title="设备状态" aria-label="设备状态" aria-expanded="false">
+    <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+      <g fill="none" stroke="#c9d1d9" stroke-width="2.4" stroke-linecap="round">
+        <path d="M18.6 12h2.8M16.67 16.67l2 2M12 18.6v2.8M7.33 16.67l-2 2M5.4 12H2.6M7.33 7.33l-2-2M12 5.4V2.6M16.67 7.33l2-2"/>
+      </g>
+      <circle cx="12" cy="12" r="6.4" fill="none" stroke="#c9d1d9" stroke-width="1.6"/>
+      <circle cx="12" cy="12" r="2.6" fill="none" stroke="#c9d1d9" stroke-width="1.6"/>
+    </svg>
+  </button>
+</div>
+
+<div id="hud">
+  <p>1 世界单位 = 1 毫米。标注平时只有一行（名字 + 负载分级），双击拉近的那台会展开"整套包围盒"（现量，不是手填）。<br>
+     拖动转视角 · 滚轮缩放 · 双指捏合缩放 · 双击设备拉近，双击空白回全景。<br>
+     脚下脉冲的颜色/节奏 = 这台的负载分级；小个子设备（交换机/路由器）用设置列表里的 ◎ 定位。</p>
+</div>
+
+<div id="mask" hidden>
+  <div id="dlg" role="dialog" aria-modal="true" aria-labelledby="dlgt">
+    <div class="dh"><span id="dlgt">设置</span><span class="grow"></span>
+      <button id="dlgx" class="mini" aria-label="关闭设置">✕ 关闭</button></div>
+    <div class="db">
+      <nav class="rail" aria-label="设置分类">
+        <button class="cat on" data-cat="dev" type="button">设备设置</button>
+        <button class="cat" data-cat="pulse" type="button">脉冲效果</button>
+        <button class="cat" data-cat="mon" type="button">性能监控</button>
+      </nav>
+      <section class="pane on" id="cat-dev">
+        <div class="ph"><b>设备列表</b><span class="cnt" id="dcount"></span><span class="grow"></span>
+          <button id="dadd" class="mini" type="button">＋ 添加设备</button></div>
+        <div class="netnote" id="cfgline">清单来源：读取中…</div>
+        <div id="rows"></div>
+        <p class="fine">这台列表就是屏幕上那一排：改名 → 标注立刻跟着改；换档位 → 就地重建那台机器；
+           添加 / 删除 / ↑↓ 排序 → 场景里的台数和左右次序同步。
+           开机 = 屏幕亮 + 电源灯亮；系统决定屏幕内容（Windows 任务栏加窗口块 / Linux 终端文本行）。</p>
+      </section>
+      <section class="pane" id="cat-pulse">
+        <div class="ph"><b>脉冲效果</b><span class="cnt">脚下那圈粒子</span></div>
+        <div id="pulseRows"></div>
+        <p class="fine">四格都是实时生效（正在飞的下一帧就变），值存在浏览器 localStorage，刷新还在。
+           脉冲只从"开机"的设备脚下发出；颜色与节奏由分级决定：空闲＝绿·3.0s·单发，
+           活跃＝黄·2.0s·双发，高负载＝红·1.2s·三连发（阈值见 docs/尺寸与实测.md 第八节，要改说一声）。
+           参考里那层 UnrealBloom 辉光没带过来 —— 派单禁止引 three 的 examples/，
+           所以这里的光晕只靠贴图柔光＋叠加混合，比参考暗一档是预期。</p>
+      </section>
+      <section class="pane" id="cat-mon">
+        <div class="ph"><b>性能监控</b><span class="cnt">采集频率</span></div>
+        <div id="monRows"></div>
+        <p class="fine">这个节拍驱动两处：右侧看板的数值推进，和每台设备"负载 → 脉冲分级"的判定，
+           两者同一个定时器，不会出现面板已更新、脚下还是旧状态。
+           SSH 那一帧不走这个节拍（一次快照要跑几秒，按 800ms 去戳真机是虐待），
+           仍是点"连通性测试"或双击聚焦时抓一次。</p>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div id="perf" hidden>
+  <div id="perfGrip" title="按住拖动改宽度"></div>
+  <div class="ph2"><h3 id="perfName"></h3><span class="grow"></span><button id="perfPause" class="vbtn mini">暂停</button></div>
+  <div class="sub" id="perfSub"></div>
+  <div id="perfBody"></div>
+  <div class="mfoot">数值是随机游走凑的版式，没接任何真实指标。</div>
+</div>
+
+<div id="btns">
+  <button id="reset">重置视角</button>
+  <button id="spin">自动旋转：开</button>
+</div>
+<div id="tip" hidden></div>
+<div id="status"></div>
+<canvas id="c"></canvas>
+
+<script type="module">
+let THREE;
+try {
+  THREE = await import("three");
+} catch (errUnpkg) {
+  try {
+    THREE = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js");
+  } catch (errJsdelivr) {
+    const s = document.getElementById("status");
+    s.style.display = "grid";
+    s.textContent = "three@0.170.0 两个 CDN 都没取到（大概是没网/代理没开）："
+      + errUnpkg.message + " || " + errJsdelivr.message;
+    throw errUnpkg;
+  }
+}
+
+const G2 = (() => {
+// 设备几何 · 机箱与网络设备（剪影架那页用）· 可移植层
+//
+// 单位：1 世界单位 = 1 毫米。若你的场景是米，调用方自己乘 0.001。
+// 姿态约定：一律按"立着"建 —— 底面落在局部 y=0，x/z 居中，正面朝 +z。
+//           躺/站/转由调用方的 rotation 决定，几何里不写死。
+// 尺寸约定：每个导出函数的包围盒严格等于 docs/尺寸与实测.md 里的真实毫米值。
+//           唯一的例外是 routerAX：厂商那个 56 只是机身高，天线竖起来后实测包围盒更高，
+//           两个数都记在尺寸表里（见该函数上方的注释）。
+//           盒子极值由特征件单独定义（宽=侧板、高=顶窗、深=电源灯端面），
+//           外壳在每个贴合面各退 1~2mm —— 两个朝外的面重合就是深度缓冲里的同一个深度，会闪。
+// 颜色约定：这里不给材质（Mesh 用 three 默认材质），移植时按 mesh.name 换 palette 键。
+//
+// 本模块顶层不碰 document / window / renderer，node 可直接 import。
+// 导出 = 9 个模型函数（laptopClosed / laptopOpen / chassisITX / chassisMATX / chassisATX / chassisEATX
+//        + nasQNAP / switch8 / routerAX）+ 1 个 helper（screenContent，屏幕内容层，要传屏幕宽高，不是模型）。
+
+
+// 真实尺寸（毫米），出处见 docs/尺寸与实测.md
+const MATX = { w: 205, h: 440, d: 347.5 }; // 乔思伯 D31
+const ATX = { w: 212, h: 409, d: 453 }; // Fractal Design Meshify C
+const EATX = { w: 240, h: 503, d: 509 }; // Fractal Design North XL
+const ITX = { w: 185, h: 376, d: 292 }; // 酷冷至尊 NR200（Mini-ITX，厂商按平写给 376×185×292，这里竖着建）
+const LAPTOP = { w: 317.7, closedH: 17.9, d: 226.9 }; // ThinkPad T14（14" 16:10）
+
+const LID_THICK = 5.9; // 合盖 17.9 = 底座 12 + 屏盖 5.9（拆分是估算，总厚是真数）
+const BASE_THICK = LAPTOP.closedH - LID_THICK;
+const SCREEN_14 = { w: 301.6, h: 188.5 }; // 14" 16:10 可视区，由对角线 355.6 算出
+const LID_TILT_DEG = 75; // 屏盖相对竖直方向后仰 75°，即开合角 105°
+
+function box(name, w, h, d, x, y, z) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d));
+  m.name = name;
+  m.position.set(x, y, z);
+  return m;
+}
+
+function footRing(group, w, d, r, h) {
+  const inset = 14;
+  const gx = w / 2 - r - inset;
+  const gz = d / 2 - r - inset;
+  const embed = 2; // 脚顶上端埋进外壳 2mm：底面照旧落在 y=0，但不会跟外壳底面共面
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.15, h + embed, 12));
+      m.name = 'case-foot';
+      m.position.set(sx * gx, (h + embed) / 2, sz * gz);
+      group.add(m);
+    }
+  }
+}
+
+// 电源指示灯。轴朝 +z（正面），端面正好落在规格极值上（见 towerShell 的层位说明）。
+function powerLed(group, x, y, z, r, len) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 10));
+  m.name = 'power-led';
+  m.rotation.x = Math.PI / 2;
+  m.position.set(x, y, z + len / 2);
+  group.add(m);
+}
+
+// 三档共用的空壳：外壳 + 脚 + 前面板底 + 电源指示灯。特征件由各档自己写死。
+//
+// 正面是三个不同深度的平面，不是齐平的一片：**外壳 d/2-2、前面板 d/2-1、电源灯 d/2**。
+// 齐平（两个朝外的面重合在同一平面）在深度缓冲里就是同一个深度，整块面积会闪；
+// 差 1mm 就分得开。外壳在正面/顶面退 1~2mm，宽度那 1mm 退在**没有侧板的那一侧**（侧板在 −x，
+// 所以外壳 x 从 −w/2+1 到 +w/2），让外面那些特征件去定义规格极值，
+// 所以包围盒仍然严格等于 docs/尺寸与实测.md 的真数（宽由侧板定、高由顶窗定、深由电源灯定）。
+function towerShell(w, h, d, footH, footR) {
+  const g = new THREE.Group();
+  const bodyH = h - footH;
+  g.add(box('case-shell', w - 1, bodyH - 1, d - 2, 0.5, footH + (bodyH - 1) / 2, -1));
+  footRing(g, w, d, footR, footH);
+  g.add(box('front-panel', w - 8, bodyH - 6, 4, 0, footH + bodyH / 2, d / 2 - 3));
+  powerLed(g, w / 2 - 26, h - 30, d / 2 - 1, 3.5, 1);
+  return g;
+}
+
+// ITX：矮一圈的方盒子，正面上下两段大网孔（NR200 正面几乎全是进风网）
+function chassisITX() {
+  const { w, h, d } = ITX;
+  const g = towerShell(w, h, d, 10, 9);
+  const bodyH = h - 10;
+  g.add(box('front-grille', w - 34, bodyH * 0.3, 3, 0, 10 + bodyH * 0.26, d / 2 - 4.5));
+  g.add(box('front-grille', w - 34, bodyH * 0.3, 3, 0, 10 + bodyH * 0.68, d / 2 - 4.5));
+  g.add(box('top-vent', 130, 3, 170, 0, h - 1.5, -10));
+  g.add(box('side-window', 4, 210, 200, -w / 2 + 2, 10 + bodyH * 0.52, -10));
+  g.add(box('io-panel', 62, 12, 3, 0, 10 + bodyH - 26, d / 2 - 4.5));
+  return g;
+}
+
+// mATX：竖条格栅 + 顶面一块散热窗（D31 的正面是大面积网孔）
+function chassisMATX() {
+  const { w, h, d } = MATX;
+  const g = towerShell(w, h, d, 12, 11);
+  const bodyH = h - 12;
+  const slats = 9;
+  for (let i = 0; i < slats; i++) {
+    const y = 12 + bodyH * 0.12 + (i * bodyH * 0.72) / (slats - 1);
+    g.add(box('front-grille', 150, 9, 3, 0, y, d / 2 - 4.5));
+  }
+  g.add(box('top-vent', 150, 3, 190, 0, h - 1.5, -20));
+  g.add(box('side-window', 4, 260, 230, -w / 2 + 2, 12 + bodyH * 0.52, -20));
+  g.add(box('io-panel', 70, 14, 3, 0, h - 30, d / 2 - 4.5));
+  return g;
+}
+
+// ATX：横条格栅 + 前后两段顶面散热（Meshify C 的正面是斜切网孔）
+function chassisATX() {
+  const { w, h, d } = ATX;
+  const g = towerShell(w, h, d, 14, 12);
+  const bodyH = h - 14;
+  const slats = 12;
+  for (let i = 0; i < slats; i++) {
+    const y = 14 + bodyH * 0.1 + (i * bodyH * 0.76) / (slats - 1);
+    g.add(box('front-grille', 168, 6, 3, 0, y, d / 2 - 4.5));
+  }
+  g.add(box('top-vent', 170, 3, 150, 0, h - 1.5, d / 2 - 110));
+  g.add(box('top-vent-rear', 170, 3, 130, 0, h - 1.5, -d / 2 + 90));
+  g.add(box('side-window', 4, 300, 340, -w / 2 + 2, 14 + bodyH * 0.5, -20));
+  g.add(box('io-panel', 90, 12, 3, 0, h - 26, d / 2 - 4.5));
+  return g;
+}
+
+// E-ATX：整幅竖肋前面板 + 两段顶面散热 + 大侧板（North XL 的正面是竖向肋条）
+function chassisEATX() {
+  const { w, h, d } = EATX;
+  const g = towerShell(w, h, d, 16, 13);
+  const bodyH = h - 16;
+  const ribs = 7;
+  for (let i = 0; i < ribs; i++) {
+    const x = -w / 2 + 28 + (i * (w - 56)) / (ribs - 1);
+    g.add(box('front-rib', 12, bodyH * 0.82, 3, x, 16 + bodyH / 2, d / 2 - 4.5));
+  }
+  g.add(box('top-vent', 190, 3, 200, 0, h - 1.5, d / 2 - 140));
+  g.add(box('top-vent-rear', 190, 3, 200, 0, h - 1.5, -d / 2 + 140));
+  g.add(box('side-window', 4, 380, 420, -w / 2 + 2, 16 + bodyH * 0.48, -10));
+  // io-panel 比竖肋再退 1mm：这一档的竖肋够高，顶到 io-panel 的高度区间里，
+  // 同一平面上就是共面（共面会闪）。错开 1mm 变成互相穿插，穿插不闪。
+  g.add(box('io-panel', 110, 14, 3, 0, 16 + bodyH - 40, d / 2 - 5.5));
+  return g;
+}
+
+// ===== 三台"不是机箱"的机器：NAS / 交换机 / 路由器 =====
+// 规格出处、以及"厂商给的两个数到底哪个是深哪个是高"的判断，都记在 docs/尺寸与实测.md 第五节。
+// 极值分配沿用 towerShell 的思路：没有突出件的轴由外壳自己顶到极值，被特征件占掉的那一面
+// 外壳退位 —— 每个朝外的面只属于一件，共面（同一轴向、同一坐标、面积还重叠）就会闪。
+const NAS551 = { w: 148, h: 220, d: 182 }; // 威联通 TS-551：官方"尺寸（高×宽×深）220×148×182 mm"
+const SW8 = { w: 158, h: 25, d: 100 }; // TP-LINK TL-SG1008D：官方"158×100×25 mm"，8 个千兆口
+const RT5410 = { w: 270, h: 56, d: 245, ant: 4 }; // TP-LINK TL-XDR5410：官方"270×56×245 mm"，4 根外置天线
+
+// NAS：立式 5 盘位（3×3.5" + 2×2.5"）。正面 5 块盘位面板 + 每块一颗状态灯，
+// 背面一块内凹 I/O 底板，底板前面再放两个网口、风扇和电源孔。
+function nasQNAP() {
+  const { w, h, d } = NAS551;
+  const g = new THREE.Group();
+  // 外壳：宽/高就是规格极值（这两轴没有突出件），前后各退位让给盘位面板和背板
+  g.add(box('nas-shell', w, h, d - 8, 0, h / 2, -1)); // z ∈ [-88, 86]
+  for (let i = 0; i < 5; i++) {
+    const y = 38 + i * 36;
+    g.add(box('nas-tray', w - 16, 34, 3, 0, y, d / 2 - 3.5)); // 前面 89：比外壳前面（86）进 3mm，比状态灯退 2mm
+    g.add(box('nas-led', 4, 4, 2, -w / 2 + 14, y, d / 2 - 1)); // 端面正好落在 d/2 = 91，深的极值由它定
+  }
+  g.add(box('nas-power', 14, 14, 2, w / 2 - 18, 16, d / 2 - 1));
+  g.add(box('nas-copy-btn', 8, 8, 2, w / 2 - 18, 200, d / 2 - 1));
+  // 背面：底板退在极值内 1mm，网口 / 风扇 / 电源孔各占一块不重叠的面积去定义 -d/2
+  g.add(box('nas-rear-plate', w - 24, h - 46, 2, 0, h / 2 - 3, -d / 2 + 2)); // z ∈ [-90, -88]
+  g.add(box('nas-port', 15, 13, 1.5, -22, 44, -d / 2 + 0.75));
+  g.add(box('nas-port-2', 15, 13, 1.5, 2, 44, -d / 2 + 0.75));
+  g.add(box('nas-fan', 70, 70, 1.5, 0, 130, -d / 2 + 0.75));
+  g.add(box('nas-dc', 16, 10, 1.5, 0, 196, -d / 2 + 0.75));
+  return g;
+}
+
+// 交换机：158×100 的金属扁盒，25 高。8 口一排开在正面，指示灯排在顶面靠前一列。
+function switch8() {
+  const { w, h, d } = SW8;
+  const g = new THREE.Group();
+  g.add(box('switch-shell', w, h - 1, d - 6, 0, (h - 1) / 2, -1)); // y ∈ [0,24]，z ∈ [-48,46]
+  for (let i = 0; i < 8; i++) {
+    const x = -63 + i * 18;
+    g.add(box('switch-port', 14, 12, 4, x, 11, d / 2 - 2)); // 前面 50 = d/2，深的极值由端口定义
+    // 顶面那一颗：从 24 顶到 25，高的极值由灯定义（灯底跟外壳顶面对面贴合，不闪）
+    g.add(box('switch-led', 6, 1, 4, x, h - 0.5, d / 2 - 10));
+  }
+  // 电源灯挪到最左：跟第一颗端口灯在同一高度平面上，投影再重叠就会闪（差 1mm 间距不够，直接挪开）
+  g.add(box('switch-led-pwr', 8, 1, 4, -w / 2 + 8, h - 0.5, d / 2 - 10));
+  g.add(box('switch-dc', 12, 9, 4, w / 2 - 16, 11, -d / 2 + 2)); // 背面 -50 = -d/2
+  return g;
+}
+
+// 路由器：270×245 的卧式机身，56 高，后面 4 根外置天线竖起。
+// 注意：包围盒的高度是"含天线"的实测值，厂商那个 56 只是机身 —— 移植时按机身数对齐。
+function routerAX() {
+  const { w, h, d } = RT5410;
+  const g = new THREE.Group();
+  g.add(box('router-body', w, h - 1, d - 4, 0, (h - 1) / 2, 0)); // y ∈ [0,55]，z ∈ [-120.5,120.5]
+  g.add(box('router-top-vent', w - 60, 1, 90, 0, h - 0.5, -20)); // 顶面那条散热脊，y ∈ [55,56]：机身高的极值由它定
+  g.add(box('router-front', 150, 10, 3, 0, 20, d / 2 - 2.5)); // 前面 121.5，比极值退 1mm
+  g.add(box('router-led', 8, 3, 3, 0, 20, d / 2 - 1.5)); // 端面 122.5 = d/2
+  g.add(box('router-ports', 110, 30, 3, 0, 20, -d / 2 + 1.5)); // 背面 -122.5 = -d/2
+  for (let i = 0; i < RT5410.ant; i++) {
+    const x = -120 + i * 80;
+    const a = new THREE.Mesh(new THREE.CylinderGeometry(4, 5, 100, 10));
+    a.name = 'router-antenna';
+    a.position.set(x, 94, -d / 2 + 18);
+    a.rotation.x = THREE.MathUtils.degToRad(-6); // 略微后倾，天线下端埋进机身
+    g.add(a);
+  }
+  return g;
+}
+
+// 笔记本 · 合盖（薄板）
+function laptopClosed() {
+  const { w, d } = LAPTOP;
+  const g = new THREE.Group();
+  // 底座前表面退 1mm（d/2-1），让屏盖前沿和电源灯去定义深度极值：
+  // 灯端面要是跟底座前表面齐平，那颗灯就会闪。规格深度 226.9 仍由屏盖/灯保证。
+  g.add(box('laptop-base', w, BASE_THICK, d - 1, 0, BASE_THICK / 2, -0.5));
+  g.add(box('laptop-lid', w, LID_THICK, d, 0, BASE_THICK + LID_THICK / 2, 0));
+  powerLed(g, w / 2 - 26, BASE_THICK - 3.5, d / 2 - 1.2, 2.2, 1.2);
+  const hinge = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, w - 40, 10));
+  hinge.name = 'laptop-hinge';
+  hinge.rotation.z = Math.PI / 2;
+  hinge.position.set(0, LAPTOP.closedH - 3.4, -d / 2 + 9);
+  g.add(hinge);
+  return g;
+}
+
+// 笔记本 · 开盖（105°）。底座 footprint 与合盖一致，高度是开合角的派生值。
+function laptopOpen() {
+  const { w, d } = LAPTOP;
+  const g = new THREE.Group();
+  g.add(box('laptop-base', w, BASE_THICK, d - 1, 0, BASE_THICK / 2, -0.5)); // 前表面退 1mm，理由同 laptopClosed
+  g.add(box('keyboard-deck', 280, 1.2, 112, 0, BASE_THICK + 0.6, -18));
+  g.add(box('trackpad', 110, 0.8, 68, 0, BASE_THICK + 0.4, 74));
+  powerLed(g, w / 2 - 26, BASE_THICK - 3.5, d / 2 - 1.2, 2.2, 1.2);
+
+  const pivot = new THREE.Group();
+  pivot.name = 'laptop-lid-pivot';
+  pivot.position.set(0, BASE_THICK, -d / 2 + 6);
+  pivot.rotation.x = THREE.MathUtils.degToRad(LID_TILT_DEG);
+
+  pivot.add(box('laptop-lid', w, LID_THICK, d, 0, LID_THICK / 2, -d / 2));
+  // 屏盖局部 +y 那一面才朝观众（转轴 75° 之后 +y 指向世界 +z 前方），
+  // 所以玻璃和内容层都在 +y 侧；装到 -y 侧就是屏盖背面，正面只能看见一块黑。
+  // 层层之间留真间隙：贴合或只差零点几毫米，深度缓冲分不开会闪。
+  pivot.add(box('laptop-screen', SCREEN_14.w, 1, SCREEN_14.h, 0, LID_THICK + 1.5, -d / 2));
+  const content = screenContent(SCREEN_14.w, SCREEN_14.h, 0.5, 'lid');
+  content.position.set(0, LID_THICK + 7.4, -d / 2);
+  pivot.add(content);
+
+  g.add(pivot);
+  return g;
+}
+
+// 屏幕内容层：Windows / Linux 两套同时建出来，显示哪套由调用方按 name 前缀切可见性。
+// 内容建在自己的"画面坐标系"里、以原点为中心，摆到屏幕上是调用方的事。
+//   frame = 'monitor'：画面在 XY 平面，+y 是画面上方，厚度沿 z（朝 +z 出光）。
+//   frame = 'lid'    ：画面在 XZ 平面（开盖笔记本屏盖内侧），-z 是画面上方，朝 +y 出光。
+// 所有块都按屏幕宽高的比例算，所以 14" 笔记本和 23.8" 显示器共用这一份布局。
+// layer = 出光方向上的层号，每层错开 2 倍厚度。**画面里互相重叠的块必须分层**：
+// 同层就是共面，共面会闪（Windows 那两块叠着的窗口就是这种情况）。
+function screenContent(sw, sh, t, frame) {
+  if (!(sw > 0) || !(sh > 0)) {
+    throw new TypeError('screenContent(sw, sh, t, frame)：sw/sh 要传屏幕可视区宽高（毫米）。这是 helper，不是模型。');
+  }
+  const g = new THREE.Group();
+  g.name = 'screen-content';
+  const hx = sw / 2;
+  const step = t * 2;
+  const quad = (name, w, h, u, v, layer) => {
+    // u = 画面横向偏移（+ 右），v = 画面纵向偏移（+ 上），o = 出光方向偏移
+    const o = (layer || 0) * step;
+    g.add(frame === 'lid' ? box(name, w, t, h, u, o, -v) : box(name, w, h, t, u, v, o));
+  };
+
+  quad('screen-win-bar', sw, sh * 0.05, 0, -sh / 2 + sh * 0.025, 0);
+  quad('screen-win-a', sw * 0.39, sh * 0.35, -sw * 0.16, sh * 0.06, 1);
+  quad('screen-win-b', sw * 0.37, sh * 0.32, sw * 0.18, -sh * 0.1, 2);
+
+  quad('screen-linux-bar', sw, sh * 0.04, 0, sh / 2 - sh * 0.02, 0);
+  const widths = [0.4, 0.66, 0.3, 0.8, 0.53, 0.2];
+  for (let i = 0; i < widths.length; i++) {
+    const lw = sw * widths[i];
+    quad('screen-linux-line', lw, sh * 0.022, -hx + sw * 0.03 + lw / 2, sh * 0.32 - i * sh * 0.1, 0);
+  }
+  quad('screen-linux-cursor', sw * 0.03, sh * 0.03, -hx + sw * 0.045, sh * 0.32 - widths.length * sh * 0.1, 0);
+  return g;
+}
+
+return { laptopClosed, laptopOpen, chassisITX, chassisMATX, chassisATX, chassisEATX, nasQNAP, switch8, routerAX, screenContent };
+})();
+const { laptopClosed, laptopOpen, chassisITX, chassisMATX, chassisATX, chassisEATX, nasQNAP, switch8, routerAX, screenContent } = G2;
+
+const G1 = (() => {
+const { laptopClosed, laptopOpen, chassisITX, chassisMATX, chassisATX, chassisEATX, nasQNAP, switch8, routerAX, screenContent } = G2;
+// 设备几何 · 外设与桌面组合（监控墙那页用）· 可移植层
+//
+// 单位 / 姿态 / 颜色约定同 chassis-geometry.mjs：
+//   1 世界单位 = 1 毫米；单机件一律"立着"建（底面 y=0、x/z 居中、正面朝 +z）；
+//   不给材质，移植时按 mesh.name 换 palette 键。
+//
+// 这一组 = 机箱与网络设备（复用 chassis-geometry.mjs）+ 显示器 / 键盘 / 鼠标 + 桌面组合。
+// 组合是 Group，只含子件几何与本地变换，不写死任何全局姿态。
+// 本模块顶层不碰 document / window / renderer，node 可直接 import。
+
+
+
+// 真实尺寸（毫米），出处见 docs/尺寸与实测.md
+const MONITOR = { w: 537.6, h: 430, d: 179.6, panelH: 307, panelD: 48, screen: { w: 527.0, h: 296.4 } };
+const KEYBOARD = { w: 440, h: 35, d: 130 };
+const MOUSE = { w: 63.5, h: 40, d: 125 };
+
+function box(name, w, h, d, x, y, z) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d));
+  m.name = name;
+  m.position.set(x, y, z);
+  return m;
+}
+
+function roundedRectShape(w, l, r) {
+  const s = new THREE.Shape();
+  const x = -w / 2;
+  const y = -l / 2;
+  s.moveTo(x + r, y);
+  s.lineTo(x + w - r, y);
+  s.quadraticCurveTo(x + w, y, x + w, y + r);
+  s.lineTo(x + w, y + l - r);
+  s.quadraticCurveTo(x + w, y + l, x + w - r, y + l);
+  s.lineTo(x + r, y + l);
+  s.quadraticCurveTo(x, y + l, x, y + l - r);
+  s.lineTo(x, y + r);
+  s.quadraticCurveTo(x, y, x + r, y);
+  return s;
+}
+
+// 23.8" 16:9 显示器，含底座。官方给的整机高是 364~496（升降），这里取中间值 430。
+function monitor24() {
+  const { w, h, d, panelH, panelD, screen } = MONITOR;
+  const g = new THREE.Group();
+  const panelY = h - panelH / 2;
+  const panelZ = -d / 2 + panelD / 2 + 4; // 面板靠后，底座朝前（+z 是朝向用户那一侧）
+
+  g.add(box('monitor-base', 240, 12, d, 0, 6, 0));
+  g.add(box('monitor-neck', 60, panelY - panelH / 2 - 12, 30, 0, 12 + (panelY - panelH / 2 - 12) / 2, panelZ));
+  g.add(box('monitor-bezel', w, panelH, panelD, 0, panelY, panelZ));
+  const screenZ = panelZ + panelD / 2;
+  // 面框前表面在 screenZ。玻璃外凸 2、内容层再从玻璃外 4 起：层层之间留真间隙。
+  // 间隙不是讲究，是深度缓冲的分辨率要（贴合或只差零点几毫米，远处会整块闪）。
+  g.add(box('monitor-screen', screen.w, screen.h, 1, 0, panelY, screenZ + 1.5));
+  const content = screenContent(screen.w, screen.h, 0.6, 'monitor');
+  content.position.set(0, panelY, screenZ + 6);
+  g.add(content);
+  return g;
+}
+
+// 全尺寸键盘。键帽按 19.05mm 键距标准做成 6 排整条，不是一颗一颗键。
+function keyboardFull() {
+  const { w, h, d } = KEYBOARD;
+  const g = new THREE.Group();
+  const deckH = h - 9;
+  g.add(box('keyboard-deck', w, deckH, d, 0, deckH / 2, 0));
+  for (let i = 0; i < 6; i++) {
+    g.add(box('keycap-row', w - 20, 9, 14, 0, deckH + 4.5, -50 + i * 20));
+  }
+  return g;
+}
+
+// 鼠标。体块由 ExtrudeGeometry 出，斜切倒角当背部弧度；包围盒严格等于 63.5 × 40 × 125。
+function mouse() {
+  const { w, h, d } = MOUSE;
+  const bevel = 6;
+  const g = new THREE.Group();
+  const shape = roundedRectShape(w - bevel * 2, d - bevel * 2, 22);
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: h - bevel * 2,
+    bevelEnabled: true,
+    bevelThickness: bevel,
+    bevelSize: bevel,
+    bevelSegments: 4,
+    curveSegments: 14,
+  });
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0, bevel, 0);
+  const body = new THREE.Mesh(geo);
+  body.name = 'mouse-body';
+  g.add(body);
+
+  const wheel = new THREE.Mesh(new THREE.CylinderGeometry(4, 4, 3, 12));
+  wheel.name = 'mouse-wheel';
+  wheel.rotation.z = Math.PI / 2;
+  wheel.position.set(0, h - 6, d / 2 - 34);
+  g.add(wheel);
+  g.add(box('mouse-seam', 1.6, 1, 62, 0, h - 1.5, d / 2 - 33));
+  return g;
+}
+
+function place(node, name, x, z) {
+  node.name = name;
+  node.position.set(x, 0, z);
+  return node;
+}
+
+// 四个桌面组合。机箱摆在右后方，显示器居中偏后，键鼠在最前（+z 朝用户）。
+// 全部落在 y=0 同一平面上，没有桌面板 —— 高度读数才干净。
+function deskLaptop() {
+  const g = new THREE.Group();
+  g.add(place(laptopOpen(), 'laptop', 0, 0));
+  g.add(place(mouse(), 'mouse', 300, 120)); // 只作比例参照，不要就删这一行
+  return g;
+}
+
+function deskITX() {
+  const g = new THREE.Group();
+  g.add(place(chassisITX(), 'chassis', 320, -270));
+  g.add(place(monitor24(), 'monitor', -160, -310));
+  g.add(place(keyboardFull(), 'keyboard', -160, 60));
+  g.add(place(mouse(), 'mouse', 110, 90));
+  return g;
+}
+
+function deskMATX() {
+  const g = new THREE.Group();
+  g.add(place(chassisMATX(), 'chassis', 330, -300));
+  g.add(place(monitor24(), 'monitor', -160, -330));
+  g.add(place(keyboardFull(), 'keyboard', -160, 60));
+  g.add(place(mouse(), 'mouse', 110, 90));
+  return g;
+}
+
+function deskATX() {
+  const g = new THREE.Group();
+  g.add(place(chassisATX(), 'chassis', 380, -330));
+  g.add(place(monitor24(), 'monitor', -160, -360));
+  g.add(place(keyboardFull(), 'keyboard', -160, 60));
+  g.add(place(mouse(), 'mouse', 110, 90));
+  return g;
+}
+
+function deskEATX() {
+  const g = new THREE.Group();
+  g.add(place(chassisEATX(), 'chassis', 450, -380));
+  g.add(place(monitor24(), 'monitor', -160, -400));
+  g.add(place(keyboardFull(), 'keyboard', -160, 60));
+  g.add(place(mouse(), 'mouse', 110, 90));
+  return g;
+}
+
+return { monitor24, keyboardFull, mouse, deskLaptop, deskITX, deskMATX, deskATX, deskEATX };
+})();
+const { monitor24, keyboardFull, mouse, deskLaptop, deskITX, deskMATX, deskATX, deskEATX } = G1;
+
+// ---------- 以下只属于这一页（原型外壳，不移植进插件） ----------
+
+// 档位表：一档 = 一个现成的桌面组合函数。设备只存"我叫什么 + 我是哪档 + 开机没 + 什么系统"，
+// 场景里的那一排和设置列表都从这里派生，所以两边不会走散。
+const TIERS = [
+  { key: "laptop", chip: "笔记本", label: "笔记本（开盖 + 鼠标作比例参照）", make: deskLaptop },
+  { key: "itx", chip: "ITX", label: "ITX 机箱 + 显示器 + 键鼠", make: deskITX },
+  { key: "matx", chip: "mATX", label: "mATX 机箱 + 显示器 + 键鼠", make: deskMATX },
+  { key: "atx", chip: "ATX", label: "ATX 机箱 + 显示器 + 键鼠", make: deskATX },
+  { key: "eatx", chip: "E-ATX", label: "E-ATX 机箱 + 显示器 + 键鼠", make: deskEATX },
+  // 后三档没有屏幕，所以 applyState 那几件（screens / win / linux）自然是空数组，不用特判。
+  // 示例型号照用户给的"威联通551"口径，另外两台挑了同量级的真型号（尺寸出处见 docs/尺寸与实测.md 第五节）。
+  { key: "nas", chip: "NAS", label: "NAS（威联通 TS-551 示例）", make: nasQNAP },
+  { key: "switch", chip: "交换机", label: "8 口交换机（TP-LINK SG1008D 示例）", make: switch8 },
+  { key: "router", chip: "路由器", label: "无线路由器（TP-LINK XDR5410 示例）", make: routerAX },
+];
+const tierOf = (k) => TIERS.find((t) => t.key === k);
+
+let seq = 0;
+const mkDev = (short, tier) => ({ id: ++seq, short, tier, power: true, os: "win", host: "", user: "", pass: "" });
+// file:// 打开（连不上配置文件）时用的内置默认，和 serve.mjs 首次生成的 设备清单.json 一致
+let devices = [
+  mkDev("笔记本", "laptop"), mkDev("ITX", "itx"), mkDev("mATX", "matx"),
+  mkDev("ATX", "atx"), mkDev("E-ATX", "eatx"),
+  mkDev("NAS", "nas"), mkDev("交换机", "switch"), mkDev("路由器", "router"),
+];
+
+// 间距：地面格子 250 mm 一格（GridHelper 24000/96）。
+// 2140 让 mATX↔ATX 这一对的净空正好 5 格（原来 2400 = 6 格，你量到的那个）。
+const SPACING = 2140;
+const OS_LABEL = { win: "Windows", linux: "Linux" };
+
+// 机身件走受光材质；屏幕 / 屏幕内容 / 电源灯走不受光材质，这样"亮"看起来是自己发光。
+const PART_COLORS = {
+  "case-shell": 0x39424e, "front-panel": 0x2b333d, "front-grille": 0x5b6672, "front-rib": 0x5b6672,
+  "top-vent": 0x232a32, "top-vent-rear": 0x232a32, "side-window": 0x6fb3d9, "io-panel": 0x8b95a1,
+  "case-foot": 0x1c222a,
+  "laptop-base": 0x2f363d, "laptop-lid": 0x3b434b, "laptop-hinge": 0x1c222a,
+  "keyboard-deck": 0x2b3138, "trackpad": 0x4a535c,
+  "monitor-bezel": 0x2a3038, "monitor-neck": 0x3b434b, "monitor-base": 0x2a3038,
+  "keycap-row": 0x525c66, "mouse-body": 0x39424e, "mouse-wheel": 0x77838f, "mouse-seam": 0x1c222a,
+  "nas-shell": 0x2f3742, "nas-tray": 0x3d4753, "nas-rear-plate": 0x232a32,
+  "nas-port": 0x11151a, "nas-port-2": 0x11151a, "nas-fan": 0x1a2028, "nas-dc": 0x11151a,
+  "switch-shell": 0x5a6572, "switch-port": 0x14181e, "switch-dc": 0x11151a,
+  "router-body": 0x272d35, "router-top-vent": 0x1c222a, "router-front": 0x39424e,
+  "router-ports": 0x14181e, "router-antenna": 0x1c222a,
+};
+// 状态灯一律不受光：它们跟电源走（关机就灭），不是被照亮的小塑料片。
+// 名字不同是因为各档几何各写各的，收集时都塞进 parts.leds。
+const LED_NAMES = ["power-led", "nas-led", "nas-power", "switch-led", "switch-led-pwr", "router-led"];
+const BASIC_COLORS = {
+  "screen-win-bar": 0x2f8ae0, "screen-win-a": 0xdfe9f5, "screen-win-b": 0xc6d9ef,
+  "screen-linux-bar": 0x33413a, "screen-linux-line": 0x57e08a, "screen-linux-cursor": 0xb6ffcf,
+};
+const SCREEN_LIT = { win: 0x1668c8, linux: 0x0e1c14 };
+const SCREEN_OFF = 0x0a0d11;
+const LED_ON = 0x7ee2a8;
+const LED_OFF = 0x232a31;
+
+const canvas = document.getElementById("c");
+// 对数深度：场景是毫米单位、跨 3 万单位，普通深度缓冲在远处一个台阶好几毫米，
+// 屏幕玻璃和内容层只差几毫米就会被判成同一深度 → 整块屏幕闪。
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1117);
+scene.fog = new THREE.Fog(0x0d1117, 20000, 46000);
+
+const camera = new THREE.PerspectiveCamera(42, 1, 1, 90000);
+scene.add(new THREE.HemisphereLight(0xc6d8ff, 0x1e232a, 0.9));
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.6);
+keyLight.position.set(2200, 2600, 2400);
+scene.add(keyLight);
+const fillLight = new THREE.DirectionalLight(0x8fb4ff, 0.45);
+fillLight.position.set(-2400, 900, -1800);
+scene.add(fillLight);
+const grid = new THREE.GridHelper(24000, 96, 0x2c343e, 0x1a1f26);
+grid.position.y = -1;
+scene.add(grid);
+
+function fmt(v) { const r = Math.round(v * 10) / 10; return Number.isInteger(r) ? String(r) : r.toFixed(1); }
+
+function paint(group) {
+  group.traverse((o) => {
+    if (!o.isMesh) return;
+    if (BASIC_COLORS[o.name] !== undefined) {
+      o.material = new THREE.MeshBasicMaterial({ color: BASIC_COLORS[o.name] });
+    } else if (LED_NAMES.indexOf(o.name) >= 0) {
+      o.material = new THREE.MeshBasicMaterial({ color: LED_ON });
+    } else if (o.name === "monitor-screen" || o.name === "laptop-screen") {
+      o.material = new THREE.MeshBasicMaterial({ color: SCREEN_LIT.win });
+    } else {
+      o.material = new THREE.MeshStandardMaterial({
+        color: PART_COLORS[o.name] !== undefined ? PART_COLORS[o.name] : 0x4a545f,
+        roughness: 0.62, metalness: 0.08,
+      });
+    }
+  });
+  return group;
+}
+
+// 按 name 把可动的件挑出来，状态只改这几件
+function collectParts(model) {
+  const p = { screens: [], win: [], linux: [], leds: [] };
+  model.traverse((o) => {
+    if (!o.isMesh) return;
+    if (o.name === "monitor-screen" || o.name === "laptop-screen") p.screens.push(o);
+    else if (LED_NAMES.indexOf(o.name) >= 0) p.leds.push(o);
+    else if (o.name.indexOf("screen-win") === 0) p.win.push(o);
+    else if (o.name.indexOf("screen-linux") === 0) p.linux.push(o);
+  });
+  return p;
+}
+
+let holders = [];
+
+function dropStation(h) {
+  scene.remove(h.holder);
+  h.model.traverse((o) => {
+    if (!o.isMesh) return;
+    o.geometry.dispose();
+    o.material.dispose();
+  });
+  h.div.remove();
+}
+
+// 按 devices 重造场景里那一排（台数、左右次序、每台是哪档全部跟着列表走）
+function rebuild() {
+  for (const h of holders) dropStation(h);
+  holders = devices.map((d, i) => {
+    const model = paint(tierOf(d.tier).make());
+    const holder = new THREE.Group();
+    holder.add(model);
+    holder.position.set((i - (devices.length - 1) / 2) * SPACING, 0, 0);
+    scene.add(holder);
+
+    const bb = new THREE.Box3().setFromObject(model);
+    const size = bb.getSize(new THREE.Vector3());
+    // 脉冲的"地盘"按机器本体算，不按整套桌面：桌面组合里显示器 + 键鼠摊到 860mm 宽，
+    // 拿它当半径的话一圈能罩到邻居家脚下。机器本体在组合里的 name 是 chassis / laptop
+    // （约定见 desk-geometry.mjs 的 place），NAS / 交换机 / 路由器这档整个模型就是本体。
+    const machine = model.getObjectByName("chassis") || model.getObjectByName("laptop") || model;
+    const msz = new THREE.Box3().setFromObject(machine).getSize(new THREE.Vector3());
+    let meshes = 0;
+    model.traverse((o) => { if (o.isMesh) meshes++; });
+
+    const div = document.createElement("div");
+    div.className = "lbl";
+    const b = document.createElement("b");
+    const span = document.createElement("span");
+    span.textContent = "整套 宽 " + fmt(size.x) + " × 高 " + fmt(size.y) + " × 深 " + fmt(size.z)
+      + " mm · " + meshes + " 件";
+    const stateLine = document.createElement("i");
+    div.append(b, stateLine, span);
+    div.title = d.short + " · " + span.textContent;
+    document.body.appendChild(div);
+
+    return { id: d.id, holder, model, div, b, stateLine, parts: collectParts(model), upH: size.y,
+      stag: (i % 2) * -50,   // 奇数条往上错一行，八台也不会糊成一坨
+      footR: Math.max(msz.x, msz.z) * 0.5, x: holder.position.x, z: holder.position.z };
+  });
+  for (const d of devices) applyState(d);
+  fitOverview();   // 台数变了 → 全景取景跟着重算（函数声明在后面，靠提升拿到）
+}
+
+// ---------- 有凭据的设备走 SSH 抓一帧，没有的继续用模拟数据 ----------
+// 判据只有一条：地址 + 用户名 + 密码 三格都填了才算"可采"。缺任何一个 → 模拟。
+// 密码不进配置文件（见上面的清单文件说明），所以刷新后要么重新输一次，要么这一台回到模拟态。
+const tipEl = document.getElementById("tip");
+const liveOf = (d) => !!(d.host && d.user && d.pass);
+const srcTag = (d) => (!liveOf(d) ? "模拟" : d.frame ? "实测" : d.probeErr ? "抓不到" : "待抓");
+
+// 每一节自己标：这节的数从哪儿来。SSH 一帧给不了速率，所以磁盘 / 网络即便抓到了也仍标"模拟"
+function srcOf(key, d) {
+  if (!liveOf(d)) return { t: "模拟", c: "sim" };
+  if (!d.frame) return { t: d.probeErr ? "抓不到，仍模拟" : "待抓，仍模拟", c: "bad" };
+  if (key === "cpu") return { t: "负载/核数 实测 · 分布分摊", c: "real" };
+  if (key === "mem") return { t: "容量 实测", c: "real" };
+  if (key === "gpu") return d.frame.gpu ? { t: "一帧实测", c: "real" } : { t: "未抓到 GPU", c: "bad" };
+  return { t: "模拟（快照无速率）", c: "sim" };
+}
+
+// 一帧 SSH 快照能给的：主机名 / 系统 / 核数 / 负载 / 内存总量与已用 / 磁盘容量 / 有没有卡。
+// 给不了的：各核分布、频率、温度、磁盘与网络的读写速率——这些仍然是模拟值，界面上标出来。
+function hwOf(d) {
+  const base = TIER_HW[d.tier] || TIER_HW.matx;
+  const f = d.frame;
+  if (!f) return base;
+  return {
+    cores: f.cores > 0 ? Math.min(CORES_CAP, f.cores) : base.cores,
+    gpus: f.gpu ? 1 : base.gpus,
+    disks: base.disks,
+    nics: base.nics,
+    mem: f.memTotalMb ? Math.round(f.memTotalMb / 1024) : base.mem,
+  };
+}
+async function probeDevice(d) {
+  try {
+    const r = await fetch("/api/probe", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ host: d.host, user: d.user, pass: d.pass }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
+    d.frame = j.frame;
+    d.probeErr = "";
+    return { ok: true, frame: j.frame };
+  } catch (e) {
+    d.frame = null;
+    d.probeErr = e.message || String(e);
+    return { ok: false, error: d.probeErr };
+  }
+}
+function showTip(html) {
+  tipEl.innerHTML = html;
+  tipEl.hidden = false;
+}
+function hideTip() { tipEl.hidden = true; tipEl.textContent = ""; }
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// 连通性测试的结果弹层：成功=一帧实测值（对得上看板那几个字段），抓不到的行标红
+function tipResult(d, res) {
+  if (!res.ok) {
+    showTip('<div class="th"><b>连通性测试 · ' + esc(d.short) + '</b><span class="st no">失败</span>'
+      + '<span class="grow"></span><button class="mini" id="tipx" type="button">关闭</button></div>'
+      + '<div class="err">' + esc(res.error) + '</div>'
+      + '<div class="fine">这台继续保持模拟数据。凭据存在本目录的设备清单.json（明文），本服务不写日志、不回显。</div>');
+  } else {
+    const f = res.frame;
+    const rows = [
+      ["主机名", f.hostname, true],
+      ["系统", f.os || "未报", !!f.os],
+      ["核心数", f.cores ? f.cores + " 核" : "未报", !!f.cores],
+      ["1 分钟负载", f.load1 ? f.load1.toFixed(2) : "未报", !!f.load1],
+      ["内存", f.memTotalMb ? (f.memUsedMb / 1024).toFixed(1) + " / " + (f.memTotalMb / 1024).toFixed(1) + " GB" : "未报", !!f.memTotalMb],
+      ["磁盘（根分区）", f.diskTotalBytes ? (f.diskUsedBytes / f.diskTotalBytes * 100).toFixed(0) + "% 已用" : "未报", !!f.diskTotalBytes],
+      ["GPU", f.gpu ? f.gpu.util + "% · 显存 " + f.gpu.memUsedMb + "/" + f.gpu.memTotalMb + " MB · " + f.gpu.temp + "°C" : "未抓到 nvidia-smi", !!f.gpu],
+      ["各核分布 / 频率 / 读写速率 / 网络", "一次快照给不了，仍是模拟值", false],
+    ];
+    showTip('<div class="th"><b>连通性测试 · ' + esc(d.short) + '（' + esc(f.hostname || d.host) + '）</b>'
+      + '<span class="st ok">成功</span><span class="grow"></span><button class="mini" id="tipx" type="button">关闭</button></div>'
+      + '<table>' + rows.map(([k, v, got]) => '<tr><td>' + esc(k) + '</td><td class="' + (got ? "" : "bad") + '"><b>' + esc(v) + "</b></td></tr>").join("") + "</table>"
+      + '<div class="fine">抓不到的行标红。这一帧已经喂给右侧看板的对应字段（核数 / 内存总量 / 是否带卡），其余仍是模拟。</div>');
+  }
+  document.getElementById("tipx").addEventListener("click", hideTip);
+}
+
+// ===== 性能看板：一张配置表 + 一个通用渲染器 =====
+// 五个资源（CPU / 内存 / 显卡 / 磁盘 / 网络）全部走同一份 RES 配置和同一套渲染：
+// 加一个资源 = 往 RES 添一条 + 放进 PANEL_ORDER，不再各写一遍 DOM。
+// 数值/节奏照用户给的"系统监控面板"参考（P/E 核、频率跟负载、温度更慢、突发、800ms 一拍、
+// 使用率绿→红 / 温度青→红两套色阶），但数值全是本地随机游走，没接任何真实指标。
+const clampv = (v, a, b) => Math.min(b, Math.max(a, v));
+const usageColor = (p) => "hsl(" + Math.round(145 - (p / 100) * 145) + " 72% 50%)";
+const tempColor = (t) => "hsl(" + Math.round(195 - clampv((t - 40) / 50, 0, 1) * 195) + " 80% 55%)";
+const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+// MB/s 进，带单位出（参考里的 fmtSpeed）
+function fmtSpeed(mbps) {
+  if (mbps < 0.01) return ["0", "MB/s"];
+  if (mbps < 1) return [(mbps * 1024).toFixed(0), "KB/s"];
+  if (mbps < 1024) return [mbps.toFixed(1), "MB/s"];
+  return [(mbps / 1024).toFixed(2), "GB/s"];
+}
+function pushHist(arr, v) {
+  arr.push(v);
+  if (arr.length > 60) arr.shift();
+}
+function hist(n, base, jitter) {
+  return Array.from({ length: n }, () => base + Math.random() * jitter);
+}
+
+// 硬件规格按档位给（这一张表就是"通用配置项"的入口，改这里等于改整块看板）
+// CORES_CAP：核数上限，所有档一起钳在这里（一般机箱用不到几十核，卡片铺太多反而看不清）。
+// 要按真机放开，就把这个值改大或删掉这一行钳制。
+const CORES_CAP = 6;
+// 后三档是"非电脑"的机器：数值按真机规格给（TS-551 = 赛扬 J3355 双核 / 2GB / 5 盘位 / 2 网口）。
+// 填 0 的那一项 = 这台没这个概念，看板上整节直接不出现（见 buildPanel），不编数。
+// XDR5410 的内存规格页没给数字，所以留 0；交换机把 8 个口当 8 张"网卡"看。
+const TIER_HW = {
+  laptop: { cores: 12, gpus: 1, disks: 1, nics: 1, mem: 16 },
+  itx: { cores: 6, gpus: 1, disks: 1, nics: 1, mem: 32 },
+  matx: { cores: 16, gpus: 1, disks: 2, nics: 1, mem: 32 },
+  atx: { cores: 16, gpus: 2, disks: 3, nics: 2, mem: 64 },
+  eatx: { cores: 24, gpus: 2, disks: 3, nics: 2, mem: 128 },
+  nas: { cores: 2, gpus: 0, disks: 5, nics: 2, mem: 2 },
+  switch: { cores: 0, gpus: 0, disks: 0, nics: 8, mem: 0 },
+  router: { cores: 1, gpus: 0, disks: 0, nics: 4, mem: 0 },
+};
+const pCountOf = (n) => Math.max(1, Math.round(n / 3));
+const GPU_NAMES = ["NVIDIA GeForce RTX 4090", "NVIDIA GeForce RTX 4080", "AMD Radeon RX 7900 XTX"];
+const DISK_NAMES = [
+  { name: "Samsung 990 PRO 2TB", type: "NVMe", total: 2000, maxRead: 7450, maxWrite: 6900 },
+  { name: "WD Black SN850X 4TB", type: "NVMe", total: 4000, maxRead: 7300, maxWrite: 6600 },
+  { name: "Crucial MX500 1TB", type: "SSD", total: 1000, maxRead: 560, maxWrite: 510 },
+  { name: "Seagate Exos 16TB", type: "HDD", total: 16000, maxRead: 270, maxWrite: 260 },
+];
+const NIC_NAMES = [
+  { name: "以太网", type: "Ethernet", link: 2500 },
+  { name: "Wi-Fi 6E", type: "Wireless", link: 1200 },
+];
+
+const RES = {
+  cpu: {
+    title: "CPU", unit: "核", dense: true, heat: true, summary: true,
+    count: (hw) => Math.min(CORES_CAP, hw.cores),
+    sub: (its) => pCountOf(its.length) + "P + " + (its.length - pCountOf(its.length)) + "E · " + its.length + " 核",
+    make: (i, hw) => {
+      const isP = i < pCountOf(hw.cores);
+      const base = 8 + Math.random() * 20;
+      return {
+        id: i, kind: isP ? "P" : "E", usage: base, freq: isP ? 2.6 : 2.0, temp: 42 + Math.random() * 8,
+        threads: Array.from({ length: isP ? 2 : 1 }, (_, t) => ({ id: t, usage: base + (Math.random() - 0.5) * 20 })),
+        history: hist(60, base, 10),
+      };
+    },
+    label: (c) => "Core " + c.id,
+    tag: (c) => c.kind,
+    tagCls: (c) => (c.kind === "P" ? "p" : "e"),
+    pct: (c) => c.usage,
+    big: (c) => [c.usage.toFixed(0), "%", usageColor(c.usage)],
+    bars: [
+      { k: "使用率", pct: (c) => c.usage, text: (c) => c.usage.toFixed(0) + "%", color: (c) => usageColor(c.usage) },
+      { k: "频率", pct: (c) => (c.freq / 5.2) * 100, text: (c) => c.freq.toFixed(2) + " GHz", color: () => "#58a6ff" },
+    ],
+    foot: [
+      { k: "温度", text: (c) => c.temp.toFixed(0) + "°C", color: (c) => tempColor(c.temp) },
+      { k: "线程", text: (c) => c.threads.length + "T" },
+    ],
+    stats: (its) => {
+      const avg = mean(its.map((c) => c.usage));
+      const hot = its.reduce((a, b) => (b.usage > a.usage ? b : a));
+      const maxT = Math.max(...its.map((c) => c.temp));
+      return [
+        { k: "总使用率", v: avg.toFixed(1), u: "%", color: usageColor(avg) },
+        { k: "平均频率", v: mean(its.map((c) => c.freq)).toFixed(2), u: "GHz" },
+        { k: "最高温度", v: maxT.toFixed(0), u: "°C", color: tempColor(maxT) },
+        { k: "最忙核心", v: "Core " + hot.id + " · " + hot.usage.toFixed(0) + "%", sm: true },
+      ];
+    },
+    // 抓到的那一帧只覆盖总使用率（1 分钟负载 / 核数）；各核分布仍是分摊出来的
+    real: (st, d) => {
+      const f = d.frame;
+      if (!f || !f.cores) return;
+      const pct = clampv((f.load1 / f.cores) * 100, 0, 100);
+      st[0].v = pct.toFixed(1);
+      st[0].color = usageColor(pct);
+    },
+    detail: (c) => [
+      { k: "类型", v: c.kind + "-Core" },
+      { k: "频率", v: c.freq.toFixed(2) + " GHz" },
+      { k: "温度", v: c.temp.toFixed(1) + " °C", color: tempColor(c.temp) },
+    ],
+    threads: (c) => c.threads.map((t) => ({ k: "线程 " + t.id, pct: t.usage, text: t.usage.toFixed(0) + "%", color: usageColor(t.usage) })),
+    step: (c, t, i) => {
+      const wave = (Math.sin(t * 0.7) + 1) / 2;
+      const per = (Math.sin(t * 1.1 + i * 0.9) + 1) / 2;
+      const spike = Math.random() < 0.05 ? 30 : 0;
+      c.usage = clampv(c.usage + (clampv(6 + wave * 45 + per * 30 + spike + Math.random() * 8, 0, 100) - c.usage) * 0.32, 0.5, 100);
+      const base = c.kind === "P" ? 2.0 : 1.6;
+      const boost = c.kind === "P" ? 2.6 : 1.8;
+      c.freq += (base + (c.usage / 100) * boost - c.freq) * 0.25;
+      c.temp += (36 + c.usage * 0.45 + (c.kind === "P" ? 4 : 0) - c.temp) * 0.10;
+      c.threads.forEach((th) => {
+        th.usage = clampv(th.usage + (clampv(c.usage + (Math.random() - 0.5) * 26, 0, 100) - th.usage) * 0.35, 0, 100);
+      });
+      pushHist(c.history, c.usage);
+    },
+    history: (c) => c.history,
+    histColor: (c) => usageColor(c.usage),
+  },
+
+  mem: {
+    title: "内存", unit: "条", count: (hw) => (hw.mem > 0 ? 1 : 0),
+    sub: (its) => its[0].type + " · " + its[0].speed + " MHz",
+    make: (i, hw) => ({
+      id: i, total: hw.mem, used: hw.mem * 0.44, cache: hw.mem * 0.18, swapTotal: 8, swapUsed: 0.9,
+      type: "DDR5", speed: 6000, channels: 2, history: hist(60, 45, 15),
+    }),
+    label: () => "物理内存",
+    tag: (m) => m.type,
+    pct: (m) => (m.used / m.total) * 100,
+    big: (m) => { const p = (m.used / m.total) * 100; return [p.toFixed(1), "%", usageColor(p)]; },
+    bars: [
+      { k: "已用", pct: (m) => (m.used / m.total) * 100, text: (m) => m.used.toFixed(1) + " GB", color: (m) => usageColor((m.used / m.total) * 100) },
+      { k: "缓存", pct: (m) => (m.cache / m.total) * 100, text: (m) => m.cache.toFixed(1) + " GB", color: () => "#bc8cff" },
+      { k: "Swap", pct: (m) => (m.swapUsed / m.swapTotal) * 100, text: (m) => m.swapUsed.toFixed(1) + " / " + m.swapTotal + " GB", color: () => "#d29922" },
+    ],
+    foot: [
+      { k: "可用", text: (m) => Math.max(0, m.total - m.used - m.cache).toFixed(1) + " GB" },
+      { k: "通道", text: (m) => (m.channels === 2 ? "双通道" : m.channels + " 通道") },
+    ],
+    stats: (its) => {
+      const m = its[0];
+      const p = (m.used / m.total) * 100;
+      return [
+        { k: "使用率", v: p.toFixed(1), u: "%", color: usageColor(p) },
+        { k: "已用+缓存", v: (m.used + m.cache).toFixed(1), u: "GB" },
+        { k: "Swap", v: ((m.swapUsed / m.swapTotal) * 100).toFixed(0), u: "%" },
+        { k: "总计", v: m.total + " GB", sm: true },
+      ];
+    },
+    real: (st, d) => {
+      const f = d.frame;
+      if (!f || !f.memTotalMb) return;
+      const pct = (f.memUsedMb / f.memTotalMb) * 100;
+      st[0].v = pct.toFixed(1);
+      st[0].color = usageColor(pct);
+      st[3].v = Math.round(f.memTotalMb / 1024) + " GB";
+    },
+    detail: (m) => [
+      { k: "规格", v: m.type + " · " + m.speed + " MHz" },
+      { k: "容量", v: m.used.toFixed(1) + " / " + m.total + " GB" },
+      { k: "Swap", v: m.swapUsed.toFixed(1) + " / " + m.swapTotal + " GB" },
+    ],
+    step: (m, t) => {
+      m.used = clampv(m.used + (clampv(m.total * (0.42 + Math.sin(t / 6) * 0.18 + Math.random() * 0.06), m.total * 0.15, m.total * 0.92) - m.used) * 0.08, 1, m.total - 2);
+      m.cache += (clampv(m.total * (0.16 + Math.sin(t / 9) * 0.06), 0.5, m.total * 0.35) - m.cache) * 0.06;
+      m.swapUsed = clampv(m.swapUsed + (Math.random() - 0.5) * 0.06, 0, m.swapTotal);
+      pushHist(m.history, (m.used / m.total) * 100);
+    },
+    history: (m) => m.history,
+    histColor: (m) => usageColor((m.used / m.total) * 100),
+  },
+
+  gpu: {
+    title: "显卡", unit: "张", count: (hw) => hw.gpus,
+    make: (i) => {
+      const name = GPU_NAMES[i % GPU_NAMES.length];
+      const memTotal = name.indexOf("4080") >= 0 ? 16 : 24;
+      const base = 15 + Math.random() * 25;
+      return {
+        id: i, name, vendor: name.split(" ")[0], memTotal, memUsed: memTotal * 0.3, usage: base,
+        temp: 42 + Math.random() * 8, power: 120, powerLimit: 450, fan: 40,
+        coreClock: 2150, history: hist(60, base, 15),
+      };
+    },
+    label: (g) => "GPU " + g.id,
+    tag: (g) => g.vendor,
+    tagCls: (g) => (g.vendor === "NVIDIA" ? "p" : "e"),
+    pct: (g) => g.usage,
+    big: (g) => [g.usage.toFixed(0), "%", usageColor(g.usage)],
+    bars: [
+      { k: "核心", pct: (g) => g.usage, text: (g) => g.usage.toFixed(0) + "%", color: (g) => usageColor(g.usage) },
+      { k: "显存", pct: (g) => (g.memUsed / g.memTotal) * 100, text: (g) => g.memUsed.toFixed(1) + " / " + g.memTotal + " GB", color: () => "#58a6ff" },
+      { k: "功耗", pct: (g) => (g.power / g.powerLimit) * 100, text: (g) => g.power.toFixed(0) + " W", color: () => "#d29922" },
+    ],
+    foot: [
+      { k: "温度", text: (g) => g.temp.toFixed(0) + "°C", color: (g) => tempColor(g.temp) },
+      { k: "风扇", text: (g) => g.fan.toFixed(0) + "%" },
+      { k: "核心频率", text: (g) => g.coreClock.toFixed(0) + " MHz" },
+    ],
+    stats: (its) => {
+      const avg = mean(its.map((g) => g.usage));
+      const maxT = Math.max(...its.map((g) => g.temp));
+      return [
+        { k: "平均使用率", v: avg.toFixed(1), u: "%", color: usageColor(avg) },
+        { k: "最高温度", v: maxT.toFixed(0), u: "°C", color: tempColor(maxT) },
+        { k: "总功耗", v: its.reduce((a, g) => a + g.power, 0).toFixed(0), u: "W" },
+        { k: "显存", v: its.reduce((a, g) => a + g.memUsed, 0).toFixed(1) + " / " + its.reduce((a, g) => a + g.memTotal, 0), sm: true },
+      ];
+    },
+    detail: (g) => [
+      { k: "型号", v: g.name },
+      { k: "显存", v: g.memUsed.toFixed(1) + " / " + g.memTotal + " GB" },
+      { k: "功耗墙", v: g.powerLimit + " W" },
+    ],
+    step: (g, t, i) => {
+      const w = (Math.sin(t * 0.55 + i * 1.7) + 1) / 2;
+      const spike = Math.random() < 0.04 ? 25 : 0;
+      g.usage = clampv(g.usage + (clampv(15 + w * 55 + spike + Math.random() * 12, 0, 100) - g.usage) * 0.25, 0, 100);
+      g.memUsed += (clampv(g.memTotal * (0.25 + (g.usage / 100) * 0.5 + Math.random() * 0.08), 0.5, g.memTotal) - g.memUsed) * 0.15;
+      g.temp += (38 + g.usage * 0.42 - g.temp) * 0.08;
+      g.power += (70 + (g.usage / 100) * (g.powerLimit - 70) - g.power) * 0.15;
+      g.fan += ((g.usage > 60 ? 76 : 41) - g.fan) * 0.08;
+      g.coreClock += (1800 + (g.usage / 100) * 700 + Math.random() * 50 - g.coreClock) * 0.1;
+      pushHist(g.history, g.usage);
+    },
+    history: (g) => g.history,
+    histColor: (g) => usageColor(g.usage),
+  },
+
+  disk: {
+    title: "磁盘 I/O", unit: "块", count: (hw) => hw.disks,
+    make: (i) => {
+      const d = DISK_NAMES[i % DISK_NAMES.length];
+      return Object.assign({ id: i }, d, {
+        used: d.total * (0.25 + Math.random() * 0.45), readSpeed: 8, writeSpeed: 5,
+        busy: 5, temp: 40, latency: 0.1, history: hist(60, 8, 15),
+      });
+    },
+    label: (d) => "DISK " + d.id,
+    tag: (d) => d.type,
+    tagCls: (d) => (d.type === "NVMe" ? "p" : d.type === "HDD" ? "" : "e"),
+    pct: (d) => d.busy,
+    big: (d) => [d.busy.toFixed(0), "%", usageColor(d.busy)],
+    bars: [
+      { k: "读", pct: (d) => (d.readSpeed / d.maxRead) * 100, text: (d) => fmtSpeed(d.readSpeed).join(" "), color: () => "#4f8cff" },
+      { k: "写", pct: (d) => (d.writeSpeed / d.maxWrite) * 100, text: (d) => fmtSpeed(d.writeSpeed).join(" "), color: () => "#6fd39a" },
+      { k: "容量", pct: (d) => (d.used / d.total) * 100, text: (d) => d.used.toFixed(0) + " / " + d.total + " GB", color: (d) => usageColor((d.used / d.total) * 100) },
+    ],
+    foot: [
+      { k: "温度", text: (d) => d.temp.toFixed(0) + "°C", color: (d) => tempColor(d.temp) },
+      { k: "延迟", text: (d) => d.latency.toFixed(2) + " ms" },
+      { k: "使用率", text: (d) => d.busy.toFixed(0) + "%" },
+    ],
+    stats: (its) => {
+      const rd = fmtSpeed(its.reduce((a, d) => a + d.readSpeed, 0));
+      const wr = fmtSpeed(its.reduce((a, d) => a + d.writeSpeed, 0));
+      const hot = its.reduce((a, b) => (b.busy > a.busy ? b : a));
+      const maxT = Math.max(...its.map((d) => d.temp));
+      return [
+        { k: "总读", v: rd[0], u: rd[1] },
+        { k: "总写", v: wr[0], u: wr[1] },
+        { k: "最忙盘", v: "DISK " + hot.id + " · " + hot.busy.toFixed(0) + "%", sm: true },
+        { k: "最热盘", v: maxT.toFixed(0), u: "°C", color: tempColor(maxT) },
+      ];
+    },
+    detail: (d) => [
+      { k: "型号", v: d.name },
+      { k: "容量", v: d.used.toFixed(0) + " / " + d.total + " GB" },
+      { k: "标称", v: "读 " + d.maxRead + " · 写 " + d.maxWrite + " MB/s" },
+    ],
+    step: (d, t, i) => {
+      const w = (Math.sin(t * 0.8 + i * 1.3) + 1) / 2;
+      const burst = Math.random() < 0.06 ? 0.5 + Math.random() * 0.5 : 0;
+      d.readSpeed += (clampv(d.maxRead * (0.02 + w * 0.15 + burst * 0.6 + Math.random() * 0.08), 0, d.maxRead) - d.readSpeed) * 0.4;
+      d.writeSpeed += (clampv(d.maxWrite * (0.02 + (1 - w) * 0.12 + burst * 0.5 + Math.random() * 0.06), 0, d.maxWrite) - d.writeSpeed) * 0.4;
+      d.busy += (clampv((d.readSpeed / d.maxRead) * 60 + (d.writeSpeed / d.maxWrite) * 60 + 2, 0.5, 100) - d.busy) * 0.3;
+      d.latency += (0.03 + (d.busy / 100) * 0.6 + Math.random() * 0.05 - d.latency) * 0.15;
+      d.temp += (35 + (d.busy / 100) * 28 + Math.random() * 2 - d.temp) * 0.06;
+      pushHist(d.history, d.busy);
+    },
+    history: (d) => d.history,
+    histColor: (d) => usageColor(d.busy),
+  },
+
+  net: {
+    title: "网络", unit: "张网卡", count: (hw) => hw.nics,
+    make: (i) => Object.assign({ id: i }, NIC_NAMES[i % NIC_NAMES.length], {
+      up: true, downSpeed: 4, upSpeed: 1.2, totalRx: 400, totalTx: 120,
+      dropped: 0, errors: 0, latency: 3,
+      downHistory: hist(60, 4, 6), upHistory: hist(60, 1.5, 3),
+    }),
+    label: (n) => n.name,
+    tag: (n) => n.type,
+    pct: (n) => (n.downSpeed / (n.link / 8)) * 100,
+    big: (n) => fmtSpeed(n.downSpeed).concat("#4f8cff"),
+    bars: [
+      { k: "↓ 下行", pct: (n) => (n.downSpeed / (n.link / 8)) * 100, text: (n) => fmtSpeed(n.downSpeed).join(" "), color: () => "#4f8cff" },
+      { k: "↑ 上行", pct: (n) => (n.upSpeed / (n.link / 8)) * 100, text: (n) => fmtSpeed(n.upSpeed).join(" "), color: () => "#6fd39a" },
+    ],
+    foot: [
+      { k: "累计", text: (n) => (n.totalRx + n.totalTx).toFixed(1) + " GB" },
+      { k: "丢包", text: (n) => String(n.dropped + n.errors) },
+      { k: "延迟", text: (n) => n.latency.toFixed(1) + " ms" },
+    ],
+    spark: (n) => [[n.downHistory, "#4f8cff"], [n.upHistory, "#6fd39a"]],
+    stats: (its) => {
+      const fd = fmtSpeed(its.reduce((a, n) => a + n.downSpeed, 0));
+      const fu = fmtSpeed(its.reduce((a, n) => a + n.upSpeed, 0));
+      return [
+        { k: "总下行", v: fd[0], u: fd[1], color: "#4f8cff" },
+        { k: "总上行", v: fu[0], u: fu[1], color: "#6fd39a" },
+        { k: "在线", v: its.filter((n) => n.up).length + " / " + its.length, sm: true },
+        { k: "最高延迟", v: Math.max(...its.map((n) => n.latency)).toFixed(1), u: "ms" },
+      ];
+    },
+    detail: (n) => [
+      { k: "链路", v: (n.link / 1000).toFixed(1) + " Gbps" },
+      { k: "累计", v: "↓ " + n.totalRx.toFixed(1) + " · ↑ " + n.totalTx.toFixed(1) + " GB" },
+      { k: "错包", v: "丢 " + n.dropped + " · 错 " + n.errors },
+    ],
+    step: (n, t, i) => {
+      const w = (Math.sin(t * 0.6 + i * 2.1) + 1) / 2;
+      const burst = Math.random() < 0.05 ? 3 + Math.random() * 8 : 0;
+      n.downSpeed += (clampv(0.5 + w * 12 + burst + Math.random() * 2, 0, 125) - n.downSpeed) * 0.35;
+      n.upSpeed += (clampv(0.2 + w * 4 + burst * 0.3 + Math.random(), 0, 60) - n.upSpeed) * 0.35;
+      n.totalRx += (n.downSpeed / 1024) * 0.8;
+      n.totalTx += (n.upSpeed / 1024) * 0.8;
+      n.latency += (1 + Math.random() * 8 - n.latency) * 0.05;
+      if (Math.random() < 0.01) n.dropped += 1;
+      pushHist(n.downHistory, n.downSpeed);
+      pushHist(n.upHistory, n.upSpeed);
+    },
+    history: (n) => n.downHistory,
+    histColor: () => "#4f8cff",
+  },
+};
+const PANEL_ORDER = ["cpu", "mem", "gpu", "disk", "net"];
+
+// ---------- 通用渲染 ----------
+const perfEl = document.getElementById("perf");
+const perfName = document.getElementById("perfName");
+const perfSub = document.getElementById("perfSub");
+const perfBody = document.getElementById("perfBody");
+const perfGrip = document.getElementById("perfGrip");
+const perfPause = document.getElementById("perfPause");
+const OFF = "—";
+let perfDev = null;
+let perfPaused = false;
+const views = {};
+const picked = {};
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+function sparkSvg(vals, color, h) {
+  const hh = h || 42;
+  const w = 320;
+  if (!vals || vals.length < 2) return "";
+  const top = Math.max(1, ...vals);
+  const step = w / (vals.length - 1);
+  const pts = vals.map((v, i) => (i * step).toFixed(1) + "," + (hh - clampv(v / top, 0, 1) * hh).toFixed(1)).join(" ");
+  return '<svg viewBox="0 0 ' + w + " " + hh + '" preserveAspectRatio="none">'
+    + '<polygon points="0,' + hh + " " + pts + " " + w + "," + hh + '" fill="' + color + '" opacity="0.16"></polygon>'
+    + '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="1.6" '
+    + 'vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"></polyline></svg>';
+}
+
+function isHeat(key) { return views[key] === "heat"; }
+function pickedItem(key) { return picked[key] ? picked[key].item : null; }
+
+function buildCard(key, rs, item) {
+  const card = el("div", "core" + (rs.dense ? "" : " wide"));
+  const tg = el("span", "ctag" + (rs.tagCls ? " " + rs.tagCls(item) : ""), rs.tag ? rs.tag(item) : "");
+  const head = el("div", "chead");
+  head.append(el("span", "cname", rs.label(item)), tg);
+  const bigT = document.createTextNode("—");
+  const bigU = el("span", "u");
+  const bigB = el("b");
+  bigB.append(bigT);
+  const bigRow = el("div", "bigno");
+  bigRow.append(bigB, bigU);
+  const bars = rs.bars.map((bd) => {
+    const i = el("i");
+    const bar = el("div", "bar");
+    bar.append(i);
+    const v = el("span", "v");
+    const row = el("div", "io");
+    row.append(el("span", "k", bd.k), bar, v);
+    card.append(row);
+    return { i, bar, v };
+  });
+  const foot = el("div", "sub2");
+  const footRefs = rs.foot.map((fd) => {
+    const b = el("b");
+    const s = el("span", null, fd.k + " ");
+    s.append(b);
+    foot.append(s);
+    return b;
+  });
+  let sp = null;
+  if (rs.spark) { sp = el("div", "miniSpark"); card.append(sp); }
+  card.append(foot);
+  card.prepend(head, bigRow);
+  card.addEventListener("click", () => { pickCard(key, item); });
+  item._ = { card, bigT, bigU, bars, footRefs, sp, tg };
+  return card;
+}
+
+function pickCard(key, item) {
+  const same = picked[key] && picked[key].item === item;
+  picked[key] = same ? null : { item };
+  paintPanel(false);
+}
+
+function buildItems(key) {
+  const rs = RES[key];
+  const grid = rs.ui.grid;
+  grid.textContent = "";
+  for (const it of rs.items) {
+    if (isHeat(key)) {
+      const cell = el("div", "hc", it.id != null ? String(it.id) : "");
+      cell.title = rs.label(it);
+      cell.addEventListener("click", () => pickCard(key, it));
+      it._ = { cell };
+      grid.append(cell);
+    } else {
+      grid.append(buildCard(key, rs, it));
+    }
+  }
+}
+
+function buildSection(key) {
+  const rs = RES[key];
+  if (!views[key]) views[key] = "card";
+  picked[key] = null;
+  const sect = el("div", "sect");
+  const cnt = el("span", "cname");
+  const src = el("span", "chip sim", "模拟");
+  const head = el("div", "shead");
+  head.append(el("span", "sname", rs.title), cnt, src);
+  if (rs.heat) {
+    const bCard = el("button", "vbtn mini" + (views[key] === "card" ? " on" : ""), "卡片");
+    const bHeat = el("button", "vbtn mini" + (views[key] === "heat" ? " on" : ""), "热力图");
+    bCard.type = bHeat.type = "button";
+    bCard.addEventListener("click", () => { views[key] = "card"; bCard.classList.add("on"); bHeat.classList.remove("on"); buildItems(key); paintPanel(false); });
+    bHeat.addEventListener("click", () => { views[key] = "heat"; bHeat.classList.add("on"); bCard.classList.remove("on"); buildItems(key); paintPanel(false); });
+    head.append(el("span", "grow"), bCard, bHeat);
+  }
+  const stats = el("div", "cstat");
+  const statRefs = rs.stats ? rs.stats(rs.items).map((s) => {
+    const t = document.createTextNode(OFF);
+    const v = el("div", "v" + (s.sm ? " sm" : ""));
+    v.append(t, el("span", "u", ""));
+    const box = el("div");
+    box.append(el("div", "k", s.k), v);
+    stats.append(box);
+    return { t, v, u: v.lastChild };
+  }) : [];
+  const grid = el("div", "grid" + (rs.dense ? " dense" : " solo"));
+  const sum = rs.summary ? el("div", "sumbar") : null;
+  const detail = el("div", "drk");
+  detail.hidden = true;
+  sect.append(head, stats, grid);
+  if (sum) sect.append(sum);
+  sect.append(detail);
+  rs.ui = { cnt, src, statRefs, grid, sum, detail, sumRefs: null };
+  if (sum) rs.ui.sumRefs = bindSum(rs);
+  buildItems(key);
+  return sect;
+}
+
+function bindSum(rs) {
+  const s = rs.ui.sum;
+  const refs = {};
+  s.append(el("span", "t", "整体"));
+  for (const [k, label, unit] of [["avg", "平均", "%"], ["max", "最高", "%"], ["min", "最低", "%"], ["balance", "负载均衡度", ""]]) {
+    const wrap = el("span", null, label + " ");
+    const b = el("b", null, OFF);
+    refs[k] = b;
+    wrap.append(b);
+    if (k === "max") { const i2 = el("i"); refs.maxCore = i2; wrap.append(document.createTextNode(unit), i2); }
+    else wrap.append(document.createTextNode(unit));
+    s.append(wrap);
+  }
+  return refs;
+}
+
+function paintCard(key, rs, it, on) {
+  const u = it._;
+  if (!u) return;
+  const sel = !!(pickedItem(key) === it);
+  if (u.cell) {
+    const p = rs.pct(it);
+    u.cell.style.background = on ? usageColor(p) : "#21262d";
+    u.cell.style.opacity = on ? (0.4 + (p / 100) * 0.6).toFixed(2) : "0.5";
+    u.cell.classList.toggle("sel", sel);
+    return;
+  }
+  u.card.classList.toggle("sel", sel);
+  u.card.style.opacity = on ? "1" : ".5";
+  const big = on ? rs.big(it) : [OFF, ""];
+  u.bigT.textContent = big[0];
+  u.bigU.textContent = big[1];
+  u.bigT.parentNode.style.color = on && big[2] ? big[2] : "";
+  rs.bars.forEach((bd, i) => {
+    const r = u.bars[i];
+    if (!on) { r.i.style.width = "0%"; r.v.textContent = OFF; return; }
+    r.i.style.width = clampv(bd.pct(it), 0, 100).toFixed(1) + "%";
+    r.i.style.background = bd.color ? bd.color(it) : "#58a6ff";
+    r.v.textContent = bd.text(it);
+  });
+  rs.foot.forEach((fd, i) => {
+    const t = u.footRefs[i];
+    t.textContent = on ? fd.text(it) : OFF;
+    t.style.color = on && fd.color ? fd.color(it) : "";
+  });
+  if (u.tg && rs.tagCls) u.tg.className = "ctag " + rs.tagCls(it);
+  if (u.sp && rs.spark) u.sp.innerHTML = on ? rs.spark(it).map(([v, c]) => sparkSvg(v, c, 26)).join("") : "";
+}
+
+function paintDetail(key, rs, on) {
+  const d = rs.ui.detail;
+  const sel = pickedItem(key);
+  if (!sel || !on) { d.hidden = true; d.textContent = ""; return; }
+  const rows = rs.detail ? rs.detail(sel) : [];
+  const ths = rs.threads ? rs.threads(sel) : [];
+  d.hidden = false;
+  d.innerHTML = sparkSvg(rs.history(sel), rs.histColor(sel), 42)
+    + rows.map((r) => '<div class="drow"><span>' + r.k + "</span><b" + (r.color ? ' style="color:' + r.color + '"' : "") + ">" + r.v + "</b></div>").join("")
+    + ths.map((t) => '<div class="thr"><span>' + t.k + '</span><div class="bar"><i style="width:'
+      + clampv(t.pct, 0, 100).toFixed(1) + "%;background:" + t.color + '"></i></div><span class="tv">' + t.text + "</span></div>").join("");
+}
+
+function paintPanel(advance) {
+  if (!perfDev) return;
+  const on = perfDev.power;
+  const t = Date.now() / 1000;
+  perfSub.textContent = tierOf(perfDev.tier).label + " · " + (on ? (perfPaused ? "已暂停" : "采集中") : "已关机");
+  for (const key of PANEL_ORDER) {
+    const rs = RES[key];
+    if (!rs.items.length) continue;   // 这台没这个概念（交换机没有 CPU/内存/磁盘）→ 这节压根没建
+    if (advance && on && !perfPaused) rs.items.forEach((it, i) => rs.step(it, t, i));
+    rs.ui.cnt.textContent = rs.sub ? rs.sub(rs.items) : rs.items.length + " " + rs.unit;
+    const tag2 = srcOf(key, perfDev);
+    rs.ui.src.textContent = tag2.t;
+    rs.ui.src.className = "chip " + tag2.c;
+    if (rs.stats) {
+      const st = on ? rs.stats(rs.items) : [];
+      if (on && rs.real) rs.real(st, perfDev);
+      rs.ui.statRefs.forEach((ref, i) => {
+        const s = st[i];
+        ref.t.textContent = s ? s.v : OFF;
+        ref.u.textContent = s ? s.u || "" : "";
+        ref.v.style.color = s && s.color ? s.color : "";
+      });
+    }
+    for (const it of rs.items) paintCard(key, rs, it, on);
+    if (rs.summary) {
+      const r = rs.ui.sumRefs;
+      if (!on) { for (const k in r) r[k].textContent = k === "maxCore" ? "" : OFF; }
+      else {
+        const us = rs.items.map((it) => rs.pct(it));
+        const avg = mean(us), max = Math.max(...us), min = Math.min(...us);
+        const hot = rs.items[us.indexOf(max)];
+        const sd = Math.sqrt(mean(us.map((v) => (v - avg) ** 2)));
+        r.avg.textContent = avg.toFixed(1);
+        r.max.textContent = max.toFixed(0);
+        r.maxCore.textContent = " (" + rs.label(hot) + ")";
+        r.min.textContent = min.toFixed(0);
+        r.balance.textContent = (clampv(1 - sd / Math.max(avg, 1), 0, 1) * 100).toFixed(0) + "%";
+      }
+    }
+    paintDetail(key, rs, on);
+  }
+}
+
+// 一台机器"该建哪几节"由硬件数决定：填 0 的那节不建（交换机没有 CPU / 内存 / 磁盘，
+// 路由器没有磁盘 / 显卡，NAS 没有显卡）。用签名比对决定要不要重建，
+// 免得每 800ms 把整块面板重做一遍 —— 那会把用户点开的卡片选中态冲掉。
+function panelKeys(d) {
+  const hw = hwOf(d);
+  return PANEL_ORDER.filter((k) => RES[k].count(hw) > 0);
+}
+function panelSig(d) {
+  const hw = hwOf(d);
+  return panelKeys(d).join(",") + "|" + [hw.cores, hw.gpus, hw.disks, hw.nics, hw.mem].join(",");
+}
+let panelSigNow = "";
+
+function buildPanel(d) {
+  perfName.textContent = d.short;
+  perfBody.textContent = "";
+  const hw = hwOf(d);
+  panelSigNow = panelSig(d);
+  for (const key of PANEL_ORDER) {
+    const rs = RES[key];
+    rs.items = Array.from({ length: rs.count(hw) }, (_, i) => rs.make(i, hw));
+    if (!rs.items.length) { rs.ui = null; continue; }   // 这节不建，也别留下一次的旧 DOM 引用
+    perfBody.append(buildSection(key));
+  }
+}
+
+function showPerf(d) {
+  perfDev = d;
+  buildPanel(d);
+  perfEl.hidden = false;
+  paintPanel(false);
+}
+function hidePerf() {
+  perfDev = null;
+  perfEl.hidden = true;
+}
+function refreshPerfHead() {
+  if (!perfDev) return;
+  perfName.textContent = perfDev.short;
+  if (panelSig(perfDev) !== panelSigNow) buildPanel(perfDev);
+  paintPanel(false);
+}
+perfPause.type = "button";
+perfPause.addEventListener("click", () => {
+  perfPaused = !perfPaused;
+  perfPause.textContent = perfPaused ? "继续" : "暂停";
+  perfPause.classList.toggle("on", perfPaused);
+  paintPanel(false);
+});
+
+// 面板宽度可拖：按住左缘竖柄左右拖，宽度记进 localStorage，刷新还在
+const W_KEY = "hm.perf.width2";
+const W_MIN = 288;
+const W_MAX = 620;
+function clampWidth(w) {
+  return Math.round(clampv(w, W_MIN, Math.min(W_MAX, window.innerWidth - 40)));
+}
+function setWidth(w) {
+  const v = clampWidth(w);
+  perfEl.style.width = v + "px";
+  try { localStorage.setItem(W_KEY, String(v)); } catch (e) { /* 隐私模式忽略 */ }
+}
+// 默认给到上限；拖过之后才用记住的值。默认值只写样式不落盘，这样以后改上限没拖过的人能跟着变。
+// 键名带 2：上一版留下的 288 是自测拖拽留下的，不该盖掉新默认。
+let savedW = 0;
+try { savedW = Number(localStorage.getItem(W_KEY)) || 0; } catch (e) { /* 同上 */ }
+perfEl.style.width = clampWidth(savedW >= W_MIN ? savedW : W_MAX) + "px";
+perfGrip.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  perfEl.classList.add("dragging");
+  // 拖动手感靠 window 级监听：指针跑得快离开那条 10 px 的柄也不会断，也不用 setPointerCapture
+  const move = (ev) => setWidth(window.innerWidth - 12 - ev.clientX);
+  const done = () => {
+    perfEl.classList.remove("dragging");
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", done);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", done);
+});
+
+// ---------- 采集节拍：性能监控设置里那一格改的就是它 ----------
+// 一个定时器同时驱动两处：右侧看板的数值游走、每台设备"负载 → 脉冲分级"的判定。
+// 放同一个定时器是刻意的 —— 否则会出现面板已经换新、脚下脉冲还挂在旧状态上。
+const MONITOR_SETTINGS = { intervalMs: 800 };
+const MON_LIMITS = { intervalMs: [200, 5000, 100] };
+const MS_KEY = "hm.mon.v1";
+try {
+  const saved = JSON.parse(localStorage.getItem(MS_KEY) || "{}");
+  if (Number.isFinite(saved.intervalMs)) MONITOR_SETTINGS.intervalMs = saved.intervalMs;
+} catch (e) { /* 读不到就用默认值 */ }
+function setMonitorSetting(key, value) {
+  const lim = MON_LIMITS[key];
+  if (!lim) return;
+  const v = Math.round(Number(value) / lim[2]) * lim[2];
+  if (!Number.isFinite(v)) return;
+  MONITOR_SETTINGS[key] = clampv(v, lim[0], lim[1]);
+  try { localStorage.setItem(MS_KEY, JSON.stringify(MONITOR_SETTINGS)); } catch (e) { /* 无痕模式写不进去就算了 */ }
+  startBeat();
+}
+let beatTimer = 0;
+function beat() {
+  stepLoads(Date.now() / 1000);
+  paintPanel(true);
+}
+function startBeat() {
+  clearInterval(beatTimer);
+  beatTimer = setInterval(beat, MONITOR_SETTINGS.intervalMs);
+}
+
+// ---------- 脚下脉冲：水平脉冲环 + 向上数据流 ----------
+// 照用户给的"种子版"参考复刻，只取脉冲这一件事（参考里开机的屏幕闪烁没带）。
+// 换算是这么做的：参考是米口径（机箱 6 单位高、相机 48 单位），这里 1 单位 = 1 mm，
+// 所以"距离和粒径"按设备 footprint 放大重定，"时间量"（寿命 2.5s、间隔 3.0/2.0/1.2s、
+// 爆发节奏 0 / 0.2 / 0.35s）是秒，原样照抄不动。
+// 参考另外挂了 UnrealBloomPass 做辉光：派单禁止 three 的 examples/，这里不引 ——
+// 光晕只剩贴图自身的柔光衰减 + 叠加混合，整体比参考暗一档是预期，不是掉效果。
+const PULSE_SETTINGS = {
+  pulseStartBrightness: 0.95,  // 刚发射时的不透明度
+  pulseEndBrightness: 0.03,    // 飞到最远端时的不透明度（越小越"划过去就没"）
+  // 参考给的是 0.35，但那是"相机 48 单位看 6 单位的机器"；这里全景相机离地十几米，
+  // 一束 60 粒挤在几个像素宽里，叠加混合直接饱和成白柱，颜色全丢。所以默认压到 0.22，
+  // 要更亮自己拖那一格（滑杆上限仍是 1）。
+  upParticleBrightness: 0.22,  // 向上粒子整体亮度，独立于脉冲，免得两个通道互相盖
+  travelK: 6,                  // 扩散范围 = 机器本体 footprint 半径 × 这个系数（mATX 那一档 ≈ 1.0 m）
+};
+const PULSE_LIMITS = {
+  pulseStartBrightness: [0.05, 1, 0.01],
+  pulseEndBrightness: [0.02, 0.8, 0.01],
+  upParticleBrightness: [0.02, 1, 0.01],
+  travelK: [2, 16, 0.5],
+};
+const PS_KEY = "hm.pulse.v1";
+try {
+  const saved = JSON.parse(localStorage.getItem(PS_KEY) || "{}");
+  for (const k in PULSE_LIMITS) if (Number.isFinite(saved[k])) setPulseSetting(k, saved[k], true);
+} catch (e) { /* 读不到就用默认值 */ }
+function setPulseSetting(key, value, quiet) {
+  const lim = PULSE_LIMITS[key];
+  if (!lim) return;
+  const v = Number(value);
+  if (!Number.isFinite(v)) return;
+  PULSE_SETTINGS[key] = clampv(v, lim[0], lim[1]);
+  if (quiet) return;   // 启动时恢复存档：逐个写 localStorage 没必要，也不该反过来覆盖
+  try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); } catch (e) { /* 同上 */ }
+}
+
+// 三级分级：结构照参考保留（颜色 / 间隔 / 单次爆发几连），max = 这一档的负载上限（%）。
+// 阈值是我先定的，要聊就改这三格，别的都不用动。
+const STATES = [
+  { key: "IDLE", cn: "空闲", color: 0x00ff41, interval: 3.0, burst: 1, max: 35 },
+  { key: "ACTIVE", cn: "活跃", color: 0xffcc00, interval: 2.0, burst: 2, max: 70 },
+  { key: "ALERT", cn: "高负载", color: 0xff0033, interval: 1.2, burst: 3, max: 100 },
+];
+const stateOf = (load) => STATES.find((s) => load <= s.max) || STATES[STATES.length - 1];
+
+// 粒子贴图是运行时画在 canvas 上的，不是外部素材文件（派单禁的是素材，不是这个）。
+// 一律画白色：颜色由 material.color 按分级染，三档共用同两张图。
+function softDotTexture() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const x = c.getContext("2d");
+  const g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, "rgba(255, 255, 255, 1)");
+  g.addColorStop(0.3, "rgba(255, 255, 255, .7)");
+  g.addColorStop(0.7, "rgba(255, 255, 255, .2)");
+  g.addColorStop(1, "rgba(255, 255, 255, 0)");
+  x.fillStyle = g;
+  x.fillRect(0, 0, 64, 64);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+function tailTexture() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const x = c.getContext("2d");
+  const g = x.createLinearGradient(0, 32, 64, 32);
+  g.addColorStop(0, "rgba(255, 255, 255, 0)");
+  g.addColorStop(0.5, "rgba(255, 255, 255, .3)");
+  g.addColorStop(0.9, "rgba(255, 255, 255, 1)");
+  g.addColorStop(1, "rgba(255, 255, 255, 1)");
+  x.fillStyle = g;
+  x.beginPath();
+  x.ellipse(32, 32, 32, 6, 0, 0, Math.PI * 2);
+  x.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const dotTex = softDotTexture();
+const tailTex = tailTexture();
+
+// 每台的负载（0~100）：填全了凭据且抓到过帧 → 用 1 分钟负载/核数，否则本地随机游走。
+// 这一格同时是分级判定的输入，所以"看板上是什么数"和"脚下是什么颜色"是同一个来源。
+const loads = new Map();   // device.id -> { pct, key }
+function realLoadOf(d) {
+  const f = d.frame;
+  if (!f || !(f.cores > 0) || typeof f.load1 !== "number") return null;
+  return clampv((f.load1 / f.cores) * 100, 0, 100);
+}
+function stepLoads(t) {
+  for (const d of devices) {
+    let w = loads.get(d.id);
+    if (!w) { w = { pct: 10 + Math.random() * 45, k: Math.random() * 6.283, key: null }; loads.set(d.id, w); }
+    const real = realLoadOf(d);
+    if (real != null) w.pct = real;
+    else {
+      const wave = (Math.sin(t * 0.35 + w.k) + 1) / 2;   // 每台的相位不同，不然五台同色同拍
+      const target = clampv(8 + wave * 76 + (Math.random() < 0.06 ? 32 : 0) + (Math.random() - 0.5) * 12, 0, 100);
+      w.pct += (target - w.pct) * 0.28;
+    }
+    const key = d.power ? stateOf(w.pct).key : null;
+    if (key !== w.key) {
+      w.key = key;
+      const h = holderOf(d);
+      if (h) paintLabel(h, d);   // 换档那一刻，名字下面那行字跟着变（不看脚下也能核对）
+    }
+  }
+}
+const levelOf = (d) => (d.power ? STATES.find((s) => s.key === (loads.get(d.id) || {}).key) : null);
+
+const PULSE = { count: 800, upCount: 60, maxAge: 2.5, upMaxAge: 2.0, size: 26, upSize: 22, yOff: 8 };
+const livePulses = [];
+const liveUp = [];
+const pulseRt = new Map();   // device.id -> { nextBurst, queue }
+let probeT = 0;              // 自检钩子的时间戳（跨次调用单调，见 __hm 里 pulseRun 的注释）
+
+function makePoints(n, color, size, map) {
+  const pos = new Float32Array(n * 3);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({ color, size, map, transparent: true, opacity: 1,
+    blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true });
+  const pts = new THREE.Points(geo, mat);
+  scene.add(pts);
+  return pts;
+}
+
+// 一次"爆发"= 按 burst 次数排进延迟队列，间隔 0 / 0.2 / 0.35s，形成"嘟"、"嘟嘟"、"嘟嘟嘟"的节奏
+function triggerBurst(rt, st, t) {
+  for (let i = 0; i < st.burst; i++) {
+    rt.queue.push({ at: t + (i === 0 ? 0 : i === 1 ? 0.2 : 0.35), color: st.color });
+  }
+}
+
+function spawnPulse(h, color) {
+  const n = PULSE.count;
+  const angles = new Float32Array(n);
+  const sp = new Float32Array(n);
+  const travel = Math.max(400, h.footR * PULSE_SETTINGS.travelK);
+  const pts = makePoints(n, color, PULSE.size, tailTex);
+  const arr = pts.geometry.attributes.position.array;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    angles[i] = a;
+    // 参考里 18~26 的每粒独立速度：快的当"前哨"、慢的拉出"尾巴"，环才不会是一条硬边
+    sp[i] = travel * (0.69 + Math.random() * 0.31);
+    const r0 = h.footR * (0.07 + Math.random() * 0.4);
+    arr[i * 3] = h.x + Math.cos(a) * r0;
+    arr[i * 3 + 1] = PULSE.yOff + Math.random() * h.footR * 0.09;
+    arr[i * 3 + 2] = h.z + Math.sin(a) * r0;
+  }
+  livePulses.push({ pts, angles, sp, age: 0, x: h.x, z: h.z, travel, ripple: h.footR * 0.07 });
+}
+
+function spawnUpward(h, color) {
+  const n = PULSE.upCount;
+  const sp = new Float32Array(n);
+  const life = new Float32Array(n);
+  const pts = makePoints(n, color, PULSE.upSize, dotTex);
+  const arr = pts.geometry.attributes.position.array;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = h.footR * (0.35 + Math.random() * 1.7);
+    arr[i * 3] = h.x + Math.cos(a) * r;
+    arr[i * 3 + 1] = PULSE.yOff + Math.random() * 12;
+    arr[i * 3 + 2] = h.z + Math.sin(a) * r;
+    sp[i] = 120 + Math.random() * 200;        // 上升速度 mm/s（参考 1.5~4 单位/s）
+    life[i] = 0.5 + Math.random() * 0.5;      // 生命周期系数：让这一把错落消失而不是同时没了
+  }
+  liveUp.push({ pts, sp, life, age: 0, x: h.x, z: h.z });
+}
+
+function disposePoints(list, i) {
+  const p = list[i];
+  scene.remove(p.pts);
+  p.pts.geometry.dispose();
+  p.pts.material.dispose();
+  list.splice(i, 1);
+}
+
+function updatePulses(dt, t) {
+  holders.forEach((h, i) => {
+    const d = devices[i];
+    let rt = d && pulseRt.get(d.id);
+    if (d && !rt) { rt = { nextBurst: null, queue: [] }; pulseRt.set(d.id, rt); }
+    const st = d && levelOf(d);
+    if (!st) {
+      // 关机 / 设备已删：排队的丢掉，已经在飞的让它跑完寿命自然散（跟参考"停发不停飞"一致）
+      if (rt) { rt.queue.length = 0; rt.nextBurst = null; }
+      return;
+    }
+    // 首次给一个错开的相位：不然五台在同一瞬间一起发、然后一起静默半秒
+    if (rt.nextBurst === null) rt.nextBurst = t + (i * st.interval) / Math.max(1, holders.length);
+    if (t >= rt.nextBurst) {
+      triggerBurst(rt, st, t);
+      rt.nextBurst = t + st.interval;
+    }
+    for (let j = rt.queue.length - 1; j >= 0; j--) {
+      if (t < rt.queue[j].at) continue;
+      const color = rt.queue[j].color;
+      rt.queue.splice(j, 1);
+      spawnPulse(h, color);
+      spawnUpward(h, color);
+    }
+  });
+
+  for (let i = livePulses.length - 1; i >= 0; i--) {
+    const p = livePulses[i];
+    p.age += dt;
+    const k = p.age / PULSE.maxAge;
+    if (k >= 1) { disposePoints(livePulses, i); continue; }
+    // 缓动 pow(k,0.75)：初段快、尾段略慢（参考里就是这一条）
+    const ease = Math.pow(k, 0.75);
+    const arr = p.pts.geometry.attributes.position.array;
+    for (let j = 0; j < p.angles.length; j++) {
+      const r = ease * p.sp[j];
+      arr[j * 3] = p.x + Math.cos(p.angles[j]) * r;
+      arr[j * 3 + 2] = p.z + Math.sin(p.angles[j]) * r;
+      arr[j * 3 + 1] = PULSE.yOff + Math.sin(t * 5 + j) * p.ripple * (1 - k);
+    }
+    p.pts.geometry.attributes.position.needsUpdate = true;
+    // 亮度核心：start → end 线性插值，曲线 pow(k,0.8)
+    const b = PULSE_SETTINGS.pulseStartBrightness
+      + (PULSE_SETTINGS.pulseEndBrightness - PULSE_SETTINGS.pulseStartBrightness) * Math.pow(k, 0.8);
+    p.pts.material.opacity = Math.max(0, b);
+    p.pts.material.size = PULSE.size * (1 - k * 0.5);
+  }
+
+  for (let i = liveUp.length - 1; i >= 0; i--) {
+    const u = liveUp[i];
+    u.age += dt;
+    const k = u.age / PULSE.upMaxAge;
+    if (k >= 1) { disposePoints(liveUp, i); continue; }
+    const arr = u.pts.geometry.attributes.position.array;
+    for (let j = 0; j < u.sp.length; j++) {
+      arr[j * 3 + 1] += u.sp[j] * dt * u.life[j];
+      arr[j * 3] += (arr[j * 3] - u.x) * dt * 0.3;     // 轻微外飘
+      arr[j * 3 + 2] += (arr[j * 3 + 2] - u.z) * dt * 0.3;
+    }
+    u.pts.geometry.attributes.position.needsUpdate = true;
+    u.pts.material.opacity = Math.max(0, PULSE_SETTINGS.upParticleBrightness * (1 - k));
+  }
+}
+
+startBeat();
+// ===== 性能看板结束 =====
+
+// ---------- 设置弹窗（齿轮开的就是它）----------
+const gear = document.getElementById("gear");
+const mask = document.getElementById("mask");
+const rowsBox = document.getElementById("rows");
+const countEl = document.getElementById("dcount");
+
+const holderOf = (d) => holders.find((h) => h.id === d.id);
+
+// 名字下面那行字：状态 + 分级 + 当前负载。分级换档时 stepLoads 会单独重画这一行，
+// 不走 applyState —— 那条路末尾有 touch()，会为了一个标签去写配置文件。
+function paintLabel(h, d) {
+  const on = d.power;
+  const st = levelOf(d);
+  const pct = on ? Math.round((loads.get(d.id) || {}).pct || 0) : 0;
+  h.stateLine.textContent = on ? (st ? "● " + st.cn + " " + pct + "%" : "●") : "○ 关机";
+  h.stateLine.className = on ? (st ? "lv-" + st.key : "on") : "";
+}
+
+// 一台设备的状态只改这几件：屏幕颜色、两套内容层的可见性、电源灯、标注那行字
+function applyState(d) {
+  const h = holderOf(d);
+  if (!h) return;
+  const on = d.power;
+  h.b.textContent = d.short;
+  const lit = on ? SCREEN_LIT[d.os] : SCREEN_OFF;
+  for (const m of h.parts.screens) m.material.color.setHex(lit);
+  for (const m of h.parts.win) m.visible = on && d.os === "win";
+  for (const m of h.parts.linux) m.visible = on && d.os === "linux";
+  for (const m of h.parts.leds) m.material.color.setHex(on ? LED_ON : LED_OFF);
+  paintLabel(h, d);
+  if (d.pwBtn) {
+    d.pwBtn.textContent = on ? "● 开机" : "○ 关机";
+    d.pwBtn.classList.toggle("on", on);
+  }
+  if (d.pwChip) {
+    d.pwChip.textContent = on ? "● 开机" : "○ 关机";
+    d.pwChip.classList.toggle("set", on);
+  }
+  refreshPerfHead();
+  touch();
+}
+
+function mini(label, title, cls) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "mini" + (cls ? " " + cls : "");
+  b.textContent = label;
+  b.title = title;
+  return b;
+}
+
+// 列表：一台一个折叠。折起来只看身份（名字 / 档位 / 电源 / 地址填没填），
+// 展开才给编辑：名称、档位、电源、系统、连接地址、用户名、密码。同一时刻只展开一台。
+let openId = null;
+
+function fieldRow(label, node) {
+  const row = el("div", "fld");
+  row.append(el("span", null, label), node);
+  return row;
+}
+function textField(kind, value, placeholder, onInput) {
+  const i = el("input", "tx");
+  i.type = kind;
+  i.value = value;
+  i.placeholder = placeholder;
+  i.autocomplete = "off";
+  i.spellcheck = false;
+  i.addEventListener("input", () => onInput(i.value));
+  return i;
+}
+
+function renderList() {
+  rowsBox.textContent = "";
+  devices.forEach((d, i) => {
+    const det = el("details", "dev");
+    det.open = openId === d.id;
+
+    const sum = el("summary");
+    const sumName = el("span", "sumName", d.short);
+    const tierChip = el("span", "chip", tierOf(d.tier).chip);
+    const pwChip = el("span", "chip" + (d.power ? " set" : ""), d.power ? "● 开机" : "○ 关机");
+    d.pwChip = pwChip;
+    const addrChip = el("span", "chip" + (d.host ? " set" : ""), d.host || "未填地址");
+    const ops = el("div", "ops");
+    const loc = mini("◎", "在屏幕上定位这台并打开它的性能看板（交换机/路由器只有几十毫米高，"
+      + "一排八台的画面里用鼠标点 3D 基本点不中，所以列表里给一个直达的）");
+    const up = mini("↑", "上移（左移一位）");
+    const dn = mini("↓", "下移（右移一位）");
+    const del = mini("删除", "把这台的 3D 移掉", "del");
+    up.disabled = i === 0;
+    dn.disabled = i === devices.length - 1;
+    // summary 里的按钮要拦住默认行为，否则点一下反而把这台展开了
+    loc.addEventListener("click", (e) => { e.preventDefault(); const h = holderOf(d); if (h) focusStation(h); });
+    up.addEventListener("click", (e) => { e.preventDefault(); moveDev(i, i - 1); });
+    dn.addEventListener("click", (e) => { e.preventDefault(); moveDev(i, i + 1); });
+    del.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (openId === d.id) openId = null;
+      devices.splice(i, 1);
+      sync();
+    });
+    ops.append(loc, up, dn, del);
+    sum.append(el("span", "caret"), sumName, tierChip, pwChip, addrChip, el("span", "grow"), ops);
+
+    const body = el("div", "dbody");
+    const nm = textField("text", d.short, "设备名", (v) => {
+      d.short = v.trim() || "(未命名)";
+      sumName.textContent = d.short;
+      applyState(d);
+    });
+    nm.maxLength = 24;
+    nm.title = "设备名（改屏幕上那行标注）";
+
+    const tier = el("select", "tier");
+    tier.title = "档位（决定这台用哪套几何）";
+    for (const t of TIERS) {
+      const o = document.createElement("option");
+      o.value = t.key;
+      o.textContent = t.label;
+      tier.add(o);
+    }
+    tier.value = d.tier;
+    tier.addEventListener("change", () => { d.tier = tier.value; sync(); });
+
+    const line = el("div", "line");
+    const pw = el("button", "pw");
+    pw.type = "button";
+    d.pwBtn = pw;
+    pw.addEventListener("click", () => { d.power = !d.power; applyState(d); });
+    const os = el("select", "os");
+    os.title = "系统（决定屏幕画什么）";
+    for (const k of ["win", "linux"]) {
+      const o = document.createElement("option");
+      o.value = k;
+      o.textContent = OS_LABEL[k];
+      os.add(o);
+    }
+    os.value = d.os;
+    os.addEventListener("change", () => { d.os = os.value; applyState(d); });
+    line.append(pw, os);
+
+    const host = textField("text", d.host, "留空：接采集时才填", (v) => {
+      d.host = v.trim();
+      addrChip.textContent = d.host || "未填地址";
+      addrChip.classList.toggle("set", !!d.host);
+      touch();
+    });
+    host.title = "连接地址（主机名或 IP）；会写进配置文件，密码不写";
+    const user = textField("text", d.user, "留空", (v) => { d.user = v.trim(); touch(); });
+    const pass = textField("password", d.pass, "明文存进配置文件", (v) => { d.pass = v; touch(); });
+
+    const sshLine = el("div", "line");
+    const testBtn = el("button", "mini test", "连通性测试");
+    testBtn.type = "button";
+    const sshSt = el("span", "cname", liveOf(d) ? (d.frame ? "已取到一帧" : "凭据已填，未测") : "未填凭据 · 走模拟");
+    testBtn.addEventListener("click", async () => {
+      if (!liveOf(d)) { tipResult(d, { ok: false, error: "地址 / 用户名 / 密码 没填全 —— 这台继续走模拟数据" }); return; }
+      testBtn.disabled = true;
+      testBtn.textContent = "测试中…";
+      const res = await probeDevice(d);
+      testBtn.disabled = false;
+      testBtn.textContent = "连通性测试";
+      sshSt.textContent = res.ok ? "已取到一帧" : "失败：" + res.error;
+      tipResult(d, res);
+      sync();
+    });
+    sshLine.append(testBtn, sshSt);
+
+    body.append(
+      fieldRow("名称", nm),
+      fieldRow("档位", tier),
+      fieldRow("状态", line),
+      fieldRow("连接地址", host),
+      fieldRow("用户名", user),
+      fieldRow("密码", pass),
+      fieldRow("SSH", sshLine),
+      el("div", "netnote", "名称 / 档位 / 电源 / 系统 / 连接地址 / 用户名 → 写进同目录的 设备清单.json（跑 serve.mjs 时）。"
+        + "密码按你说的明文存进这个文件（它因此是敏感文件，见 serve.mjs 顶上那句提醒）。"
+        + "三格填全 = 这台改走 SSH 抓一帧；缺任一格 = 模拟数据。")
+    );
+
+    det.append(sum, body);
+    // 互斥在 click 上做（toggle 事件是异步派发的，靠它会慢半拍）：
+    // 这台要展开，就先把别的关掉。
+    sum.addEventListener("click", () => {
+      if (det.open) return;
+      for (const other of rowsBox.querySelectorAll("details.dev[open]")) if (other !== det) other.open = false;
+    });
+    det.addEventListener("toggle", () => {
+      if (det.open) openId = d.id;
+      else if (openId === d.id) openId = null;
+    });
+    rowsBox.append(det);
+  });
+  for (const d of devices) applyState(d);
+  countEl.textContent = devices.length + " 台 · 屏幕上也是这 " + devices.length + " 台";
+}
+
+function moveDev(i, to) {
+  if (to < 0 || to >= devices.length) return;
+  const [d] = devices.splice(i, 1);
+  devices.splice(to, 0, d);
+  sync();
+}
+
+// 列表动一处，场景重造一遍：改档 / 加台 / 删台 / 排序都会走到这里
+function sync() {
+  if (perfDev && !devices.includes(perfDev)) hidePerf();
+  rebuild();
+  renderList();
+  for (const d of devices) applyState(d);
+  if (perfDev) refreshPerfHead();
+}
+
+function setDialog(open) {
+  mask.hidden = !open;
+  gear.classList.toggle("on", open);
+  gear.setAttribute("aria-expanded", String(open));
+  if (open) {
+    const first = rowsBox.querySelector("summary");
+    if (first) first.focus();
+  }
+}
+gear.addEventListener("click", () => setDialog(mask.hidden));
+document.getElementById("dlgx").addEventListener("click", () => setDialog(false));
+mask.addEventListener("pointerdown", (e) => { if (e.target === mask) setDialog(false); });
+window.addEventListener("keydown", (e) => { if (e.key === "Escape" && !mask.hidden) setDialog(false); });
+document.getElementById("dadd").addEventListener("click", () => {
+  devices.push(mkDev("设备 " + (seq + 1), "matx"));
+  sync();
+});
+
+// ---------- 设置弹窗：左侧分类导轨 + 右侧三块面板 ----------
+// 导轨只切 display，不重建 DOM：滑杆的值由 PULSE_SETTINGS / MONITOR_SETTINGS 单一来源渲染，
+// 切来切去不会把用户刚拖到的位置忘掉。
+const catBtns = Array.from(document.querySelectorAll("#dlg .rail .cat"));
+function showCat(key) {
+  for (const b of catBtns) b.classList.toggle("on", b.dataset.cat === key);
+  for (const p of document.querySelectorAll("#dlg .pane")) p.classList.toggle("on", p.id === "cat-" + key);
+}
+for (const b of catBtns) b.addEventListener("click", () => showCat(b.dataset.cat));
+
+// 一行滑杆：标题 + 当前值 + 滑杆 + 一句说明；onInput 负责写回配置并（按需）落盘
+function sliderRow(mount, o) {
+  const [min, max, step] = o.limits;
+  const wrap = el("div", "sld");
+  const lab = el("div", "lab");
+  lab.append(el("span", null, o.title));
+  const val = el("b");
+  lab.append(val);
+  const input = document.createElement("input");
+  input.type = "range";
+  input.min = min; input.max = max; input.step = step;
+  input.setAttribute("aria-label", o.title);
+  wrap.append(lab, input, el("div", "hint", o.hint));
+  const paint = () => {
+    const v = o.get();
+    input.value = v;
+    val.textContent = o.fmt(v);
+  };
+  input.addEventListener("input", () => { o.set(input.value); paint(); });
+  paint();
+  mount.append(wrap);
+  return paint;
+}
+
+const pctFmt = (v) => Math.round(v * 100) + "%";
+const mmFmt = (v) => "×" + v.toFixed(1);
+for (const o of [
+  { key: "pulseStartBrightness", limits: PULSE_LIMITS.pulseStartBrightness, title: "脉冲起始亮度",
+    hint: "刚发射那一刻的亮度。调大更扎眼，调小变成\"暗流涌动\"。", fmt: pctFmt },
+  { key: "pulseEndBrightness", limits: PULSE_LIMITS.pulseEndBrightness, title: "脉冲收尾亮度",
+    hint: "飞到最远端还剩多少。调小收得干净，调大远端会留一片残光。", fmt: pctFmt },
+  { key: "upParticleBrightness", limits: PULSE_LIMITS.upParticleBrightness, title: "向上粒子亮度",
+    hint: "那缕往上飘的数据流。独立一格，免得跟脉冲亮度互相抢。", fmt: pctFmt },
+  { key: "travelK", limits: PULSE_LIMITS.travelK, title: "脉冲范围",
+    hint: "扩散半径 = 机器本体（不含显示器/键鼠）底面半径 × 这个倍数。6 大约是台间距的一半，再大就穿到邻居家脚下。", fmt: mmFmt },
+]) {
+  sliderRow(document.getElementById("pulseRows"), {
+    title: o.title, hint: o.hint, limits: o.limits, fmt: o.fmt,
+    get: () => PULSE_SETTINGS[o.key],
+    set: (v) => setPulseSetting(o.key, v),
+  });
+}
+sliderRow(document.getElementById("monRows"), {
+  title: "采集间隔", hint: "一秒钟走几轮的间隔。200ms 最激进，5000ms 最省。",
+  limits: MON_LIMITS.intervalMs, fmt: (v) => v.toFixed(0) + " ms · " + (1000 / v).toFixed(1) + " 次/秒",
+  get: () => MONITOR_SETTINGS.intervalMs,
+  set: (v) => setMonitorSetting("intervalMs", v),
+});
+
+// ---------- 设备清单 ↔ 本地配置文件 ----------
+// 用 node serve.mjs 起本地服务打开这页时，编辑会写回同目录的 设备清单.json；
+// 直接 file:// 双击打开时浏览器不能写盘，退回内存态并在弹窗里标出来。
+// 清单存 name/tier/power/os/host/user/pass —— pass 明文落盘是你 2026-09-23 同意的，
+// 代价是这个文件成了敏感文件：别拷进仓库、别进分享包。
+const CFG_API = "/api/devices";
+const CFG_FILE = "设备清单.json";
+const cfgLine = document.getElementById("cfgline");
+let cfgMode = "内存";
+let cfgLast = "";
+let cfgTimer = 0;
+let booted = false;
+
+function setCfgLine() {
+  cfgLine.textContent = cfgMode === "文件"
+    ? "清单已接到本地文件 " + CFG_FILE + " · 编辑即写回" + (cfgLast ? "（最近 " + cfgLast + "）" : "")
+    : "没连上本地文件（现在是 file:// 打开？）：编辑只在内存里，刷新即丢。要落盘请跑 node serve.mjs，再开 http://127.0.0.1:8123/";
+}
+function toFileList() {
+  return devices.map((d) => ({ name: d.short, tier: d.tier, power: d.power, os: d.os, host: d.host, user: d.user, pass: d.pass }));
+}
+async function saveNow() {
+  try {
+    const r = await fetch(CFG_API, { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ list: toFileList() }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    cfgLast = new Date().toTimeString().slice(0, 8);
+  } catch (e) {
+    cfgMode = "内存";
+    cfgLine.textContent = "写入 " + CFG_FILE + " 失败：" + e.message + "（编辑只在内存里）";
+    return;
+  }
+  setCfgLine();
+}
+function touch() {
+  if (!booted || cfgMode !== "文件") return;
+  clearTimeout(cfgTimer);
+  cfgTimer = setTimeout(saveNow, 400);
+}
+async function loadDevices() {
+  if (location.protocol === "file:") {
+    // 不发这一枪：相对地址在 file:// 下会解析成 file:///E:/api/devices，
+    // 浏览器必然记一条红色错误，功能上虽然后退回默认，但 console 就不再是干净的
+    cfgMode = "内存";
+    setCfgLine();
+    return;
+  }
+  try {
+    const r = await fetch(CFG_API, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (!Array.isArray(j.list) || !j.list.length) throw new Error("清单为空");
+    devices = j.list.map((it) => Object.assign(
+      mkDev(String(it.name || "(未命名)"), TIERS.some((t) => t.key === it.tier) ? it.tier : "matx"),
+      { power: it.power !== false, os: it.os === "linux" ? "linux" : "win",
+        host: typeof it.host === "string" ? it.host : "", user: typeof it.user === "string" ? it.user : "",
+        pass: typeof it.pass === "string" ? it.pass : "" }
+    ));
+    cfgMode = "文件";
+  } catch (e) {
+    cfgMode = "内存";
+  }
+  setCfgLine();
+}
+
+// ---------- 开机设备脚下的脉冲已上移到"性能看板结束"之前（要在地面网格与 holders 之后、
+// 设置弹窗之前，因为它得先把 PULSE_SETTINGS 摆好，弹窗那三段滑杆才读得到初值）----------
+// 启动（loadDevices + sync）挪到文件末尾了：sync 会走到 fitOverview，那要读 OVERVIEW / HOME，
+// 放在它们声明之前就是 TDZ 崩页 —— 这一类错前一版已经踩过一次（liveOf）。
+
+const HOME = { az: -0.62, pol: 1.1, dist: 9000 };
+let az = HOME.az, pol = HOME.pol, dist = HOME.dist;
+const target = new THREE.Vector3(0, 300, 0);
+let spinning = true;
+
+// 面板占掉右边一块，所以聚焦时别把机器丢在整屏正中——那会紧贴面板。
+// 做法是把相机沿"屏幕右方向"平移一段（truck，不改朝向），机器就落到
+// 面板左边那块可视区的水平中心上。面板拖宽/收起，这个量每帧跟着变。
+const shiftVec = new THREE.Vector3();
+const lookTmp = new THREE.Vector3();
+let shiftPx = 0;
+let focusRadius = 0;
+function wantShiftPx() {
+  if (!perfDev) return 0;
+  const w = perfEl.getBoundingClientRect().width;
+  return w > 0 ? (w + 12) / 2 : 0;   // 12 = 面板离右缘的间距
+}
+function applyCamera() {
+  const sp = Math.sin(pol);
+  camera.position.set(
+    target.x + dist * sp * Math.sin(az),
+    target.y + dist * Math.cos(pol),
+    target.z + dist * sp * Math.cos(az),
+  );
+  shiftPx += (wantShiftPx() - shiftPx) * 0.18;
+  if (Math.abs(shiftPx) < 0.2) shiftPx = 0;
+  if (shiftPx > 0) {
+    const fovRad = THREE.MathUtils.degToRad(camera.fov);
+    const worldPerPx = (2 * dist * Math.tan(fovRad / 2)) / window.innerHeight;
+    shiftVec.set(Math.cos(az), 0, -Math.sin(az)).multiplyScalar(shiftPx * worldPerPx);
+    camera.position.add(shiftVec);
+    lookTmp.copy(target).add(shiftVec);
+    camera.lookAt(lookTmp);
+    return;
+  }
+  camera.lookAt(target);
+}
+
+// 双击设备 = 把那台拉到屏幕中间并拉近；双击空白 = 回到全景。
+// 距离按"包围球正好放进画面"算，所以四档各自近到合适的量，不是一个写死的数。
+const OVERVIEW = { target: new THREE.Vector3(0, 300, 0), dist: HOME.dist };
+const want = { target: OVERVIEW.target.clone(), dist: OVERVIEW.dist };
+let focusing = false;
+const ray = new THREE.Raycaster();
+const ndc = new THREE.Vector3();
+
+function moveTo(t, d) {
+  want.target.copy(t);
+  want.dist = Math.min(30000, Math.max(1500, d));
+  focusing = true;
+}
+function overview() { moveTo(OVERVIEW.target, OVERVIEW.dist); hidePerf(); pinLabel(null); }
+
+// 全景距离不是写死的：一排有几台是用户说了算（增删设备 / 换档都会改台数），
+// 所以每次重造那一排就按当前实际跨度重算一遍 —— 否则加到 8 台时最左最右就切在画面外。
+function fitOverview() {
+  if (!holders.length) return;
+  const b = new THREE.Box3();
+  for (const h of holders) b.expandByObject(h.holder);
+  const size = b.getSize(new THREE.Vector3());
+  const center = b.getCenter(new THREE.Vector3());
+  const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+  const dH = (size.x / 2) / (tanV * camera.aspect);            // 让整排的左右都进画面
+  const dV = (size.y / 2 + Math.abs(center.y - OVERVIEW.target.y)) / tanV; // 让最高的那台上下都进画面
+  OVERVIEW.dist = Math.min(30000, Math.max(1500, Math.max(dH, dV) * 1.18)); // 1.18 = 给头顶那行标注留余量
+  OVERVIEW.target.set(center.x, Math.max(300, center.y), center.z);
+  // 雾的起止跟着全景距离走：写死 20000 起雾的话，台数一多整排会被"吞进黑里"，
+  // 那不是层次，是看不见。
+  scene.fog.near = OVERVIEW.dist * 1.15;
+  scene.fog.far = OVERVIEW.dist * 2.4;
+}
+// 聚焦哪台就把那台的包围盒那一行展开（标注平时只有一行，八台同屏才排得下）
+function pinLabel(h) { for (const x of holders) x.div.classList.toggle("pin", x === h); }
+// 面板占掉多宽，可用画面就少多宽——聚焦的取景按"剩下那块"算，不是按整屏
+function perfWidthPx() {
+  const shown = perfEl.getBoundingClientRect().width;
+  return shown > 0 ? shown : clampWidth(savedW >= W_MIN ? savedW : W_MAX);
+}
+function focusStation(h) {
+  pinLabel(h);
+  const bb = new THREE.Box3().setFromObject(h.model);
+  const c = bb.getCenter(new THREE.Vector3());
+  const r = bb.getBoundingSphere(new THREE.Sphere()).radius;
+  const vFov = THREE.MathUtils.degToRad(camera.fov);
+  const freeW = Math.max(140, window.innerWidth - 12 - perfWidthPx() - 12);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * (freeW / window.innerHeight));
+  moveTo(c, (r / Math.sin(Math.min(vFov, hFov) / 2)) * 1.25);
+  focusRadius = r;
+  const d = devices.find((x) => x.id === h.id);
+  if (d) showPerf(d);
+}
+function stationOf(obj) {
+  let o = obj;
+  while (o.parent && o.parent !== scene) o = o.parent;
+  return holders.find((h) => h.holder === o);
+}
+canvas.addEventListener("dblclick", (e) => {
+  ndc.set((e.clientX / window.innerWidth) * 2 - 1, -((e.clientY / window.innerHeight) * 2 - 1), 0.5);
+  ray.setFromCamera(ndc, camera);
+  const hit = ray.intersectObjects(holders.map((h) => h.model), true);
+  const h = hit.length ? stationOf(hit[0].object) : null;
+  if (h) focusStation(h); else overview();
+});
+
+// 原型自检用的只读探针（背景标签页 rAF 不跑，靠它核对列表与场景是否一一对应；不需要就整段删掉）
+window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wantDist: want.dist,
+  dist, focusing, az, pol, stations: holders.map((h) => h.holder.position.x),
+  holderIds: holders.map((h) => h.id), labels: holders.map((h) => h.b.textContent),
+  heights: holders.map((h) => Math.round(h.upH)),
+  // 弹窗状态读计算样式，别读 mask.hidden —— 作者写的 display 会盖掉 [hidden]，属性看着 true 而实际还挡着
+  dialog: getComputedStyle(mask).display,
+  // 背景标签页 rAF 不跑，靠这个手动走一帧并回投"聚焦物体落在屏幕哪个像素"
+  snap: () => {
+    applyCamera();
+    const v = new THREE.Vector3(target.x, target.y, target.z).project(camera);
+    const e = camera.matrixWorld.elements;
+    const right = new THREE.Vector3(e[0], e[1], e[2]);
+    const v2 = new THREE.Vector3(target.x, target.y, target.z).addScaledVector(right, focusRadius).project(camera);
+    return { x: Math.round((v.x * 0.5 + 0.5) * window.innerWidth), y: Math.round((-v.y * 0.5 + 0.5) * window.innerHeight),
+      半宽px: Math.round(Math.abs(v2.x - v.x) * 0.5 * window.innerWidth), shift: Math.round(shiftPx) };
+  },
+  devs: devices.map((d) => d.short + "|" + d.tier + "|" + (d.power ? "on" : "off") + "|" + d.os
+    + "|" + (liveOf(d) ? (d.frame ? "SSH实测" : d.probeErr ? "SSH失败" : "SSH待抓") : "模拟")),
+  // 背景标签页 rAF 不跑，脉冲系统没法自己走：这个钩子手推它。时间基准取"真时钟与上次探针里更靠前的那个"
+  // 往后推，并且跨次调用保持单调 —— 上一版每次从 0 起，把队列里的延迟项甩到了"未来"，读数假 stuck。
+  pulseRun: (steps) => {
+    const base = Math.max(probeT, clock.elapsedTime);
+    const t0 = performance.now();
+    for (let i = 1; i <= steps; i++) updatePulses(0.05, base + i * 0.05);
+    probeT = base + steps * 0.05;
+    return { 环: livePulses.length, 上飘: liveUp.length,
+      粒子数: livePulses.reduce((a, p) => a + p.angles.length, 0) + liveUp.reduce((a, p) => a + p.sp.length, 0),
+      场景内Points: scene.children.filter((o) => o.type === "Points").length,
+      // 只含 updatePulses 的 CPU 提交时间，不含绘制与合成 —— GPU 侧要开人眼/帧率看
+      每帧CPU毫秒: +((performance.now() - t0) / steps).toFixed(3),
+      时刻: +probeT.toFixed(2), 排队: holders.map((h) => ((pulseRt.get(h.id) || {}).queue || []).length) };
+  },
+  pulseCount: () => livePulses.length + liveUp.length,
+  pulseState: () => devices.map((d) => d.short + "|" + (d.power ? "on" : "off") + "|"
+    + ((loads.get(d.id) || {}).key || "-") + "|" + ((loads.get(d.id) || {}).pct || 0).toFixed(0) + "%"),
+  pulseSettings: () => ({ ...PULSE_SETTINGS, intervalMs: MONITOR_SETTINGS.intervalMs }),
+  pulseLabels: () => holders.map((h) => h.stateLine.textContent + " [" + h.stateLine.className + "]"),
+});
+
+document.getElementById("reset").addEventListener("click", () => {
+  focusing = false;
+  hidePerf();
+  pinLabel(null);
+  az = HOME.az; pol = HOME.pol;
+  target.copy(OVERVIEW.target); dist = OVERVIEW.dist;
+  want.target.copy(OVERVIEW.target); want.dist = OVERVIEW.dist;
+  applyCamera();
+});
+document.getElementById("spin").addEventListener("click", (e) => {
+  spinning = !spinning;
+  e.currentTarget.textContent = "自动旋转：" + (spinning ? "开" : "关");
+});
+
+const pointers = new Map();
+let pinchStart = 0, pinchDist = 0;
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinchStart = Math.hypot(a.x - b.x, a.y - b.y);
+    pinchDist = dist;
+  }
+  spinning = false;
+  document.getElementById("spin").textContent = "自动旋转：关";
+});
+canvas.addEventListener("pointermove", (e) => {
+  const prev = pointers.get(e.pointerId);
+  if (!prev) return;
+  const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+  prev.x = e.clientX; prev.y = e.clientY;
+  if (pointers.size === 1) {
+    az -= dx * 0.006;
+    pol = Math.min(1.52, Math.max(0.12, pol - dy * 0.006));
+  } else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const now = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinchStart > 0) { dist = Math.min(30000, Math.max(1500, pinchDist * (pinchStart / Math.max(now, 1)))); focusing = false; }
+  }
+});
+function endPointer(e) { pointers.delete(e.pointerId); if (pointers.size < 2) pinchStart = 0; }
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  focusing = false;
+  dist = Math.min(30000, Math.max(1500, dist * Math.exp(e.deltaY * 0.0011)));
+}, { passive: false });
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  fitOverview();   // 全景的横向取景跟 aspect 有关，窗口一变就要重算
+}
+window.addEventListener("resize", resize);
+resize();
+applyCamera();
+
+const proj = new THREE.Vector3();
+const clock = new THREE.Clock();
+function tick() {
+  requestAnimationFrame(tick);
+  const dt = Math.min(0.05, clock.getDelta());
+  if (spinning) az += 0.0016;
+  updatePulses(dt, clock.elapsedTime);
+  if (focusing) {
+    target.lerp(want.target, 0.14);
+    dist += (want.dist - dist) * 0.14;
+    if (target.distanceTo(want.target) < 1 && Math.abs(dist - want.dist) < 1) {
+      target.copy(want.target);
+      dist = want.dist;
+      focusing = false;
+    }
+  }
+  applyCamera();
+  for (const h of holders) {
+    const topY = h.upH + 90;
+    proj.set(h.holder.position.x, topY, h.holder.position.z).project(camera);
+    if (proj.z > 1) { h.div.style.display = "none"; continue; }
+    h.div.style.display = "block";
+    h.div.style.transform = "translate(-50%,-100%) translate("
+      + ((proj.x * 0.5 + 0.5) * window.innerWidth).toFixed(1) + "px,"
+      + ((-proj.y * 0.5 + 0.5) * window.innerHeight + h.stag).toFixed(1) + "px)";
+  }
+  renderer.render(scene, camera);
+}
+// 启动放在所有声明之后：sync → rebuild → fitOverview 要读 OVERVIEW / HOME，
+// 放在它们前面就是 TDZ 崩页（同一类错这一版已经踩过 liveOf 一次）。
+await loadDevices();
+sync();
+booted = true;
+target.copy(OVERVIEW.target);
+dist = OVERVIEW.dist;   // 首屏就按"当前这一排"取景，不是按当初五台时凑的 9000
+applyCamera();
+tick();
+</script>
+</body>
+</html>

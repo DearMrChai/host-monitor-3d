@@ -1,0 +1,17 @@
+{
+  "name": "host-monitor-3d",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Host Monitor 的 3D 陈列架 / 监控墙原型：程序化机箱与设备几何（1 单位 = 1 毫米）+ 两页可直接打开的 HTML + 本地采集服务。尚未接入 dsh-plugin-host-monitor。",
+  "scripts": {
+    "start": "node serve.mjs",
+    "inject": "node inject-geometry.mjs",
+    "verify": "node verify-geometry.mjs",
+    "check": "node inject-geometry.mjs && node verify-geometry.mjs"
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0",
+    "three": "0.170.0"
+  }
+}
