@@ -1,0 +1,48 @@
+【任务】
+为我的 3D 监控项目集成一个"点阵涟漪地形"组件，用来表现设备的活跃状态。
+
+【背景】
+我已经有 4 个设备区域和一个数字雨背景。现在需要把地面替换成一张点阵网格，
+平静时完全平坦（暗蓝色），当设备触发脉冲时，从设备底部激起一圈涟漪向外扩散。
+
+【视觉参考】
+平静的湖面被投入石子后，涟漪一圈圈荡漾出去的效果。但"湖面"是由发光点阵构成的。
+
+【技术要求】
+1. 使用 THREE.Points 粒子系统，而不是网格（Wireframe）
+2. 每个顶点是一个发光圆点（用程序化生成的圆形渐变贴图）
+3. 涟漪的数学模型：
+   - 高斯包络：Math.exp(-(d*d) / (thickness*thickness*100))，其中 d 是"顶点到涟漪环的距离"
+   - 波形：Math.sin(d * 0.5) * envelope
+   - 生命周期衰减：(1 - age / maxAge)
+   - 距离衰减：Math.exp(-radius * 0.008)
+   - 综合：wave = 上面四项相乘 × amplitude
+4. 涟漪同时影响：
+   - 顶点位置 Y（高度起伏）：y += wave * rippleHeight
+   - 顶点颜色（被点亮）：colors += 涟漪颜色 × |wave| × rippleBrightness
+5. 涟漪可以叠加：多个涟漪同时存在时，每个顶点的最终高度和颜色是所有涟漪贡献的累加
+6. 涟漪列表管理：
+   - 用一个数组存储所有活跃涟漪
+   - 每个涟漪有 x, z, age, radius, amplitude, colorR/G/B 字段
+   - age 超过 4 秒或 radius 超过 150 就删除
+7. 对外暴露方法：
+   - addRipple(x, z, colorHex, amplitude) → 激起一个涟漪
+   - update(delta) → 主循环里每帧调用
+
+【参数化要求】
+把以下 5 个参数集中到一个 PULSE_SETTINGS 对象里，方便接入项目的设置窗口：
+- rippleHeight: 0.5   （涟漪高度，建议范围 0~8）
+- rippleSpeed: 10     （扩散速度，建议范围 5~50）
+- rippleThickness: 1.0（环厚度，建议范围 0.3~4）
+- rippleBrightness: 0.25（亮度，建议范围 0~2）
+- rainBrightness: 0.8 （数字雨亮度，独立控制）
+
+【性能注意】
+- 地形细分控制在 180×180 = 32400 顶点以内
+- 每帧只更新 position 和 color 属性，不重建几何体
+- 使用 AdditiveBlending + depthWrite: false 避免透明遮挡
+
+【集成到现有场景】
+- 替换掉现有的 GridHelper
+- 在主循环里调用 rippleTerrain.update(delta)
+- 在设备触发脉冲时调用 rippleTerrain.addRipple(deviceX, deviceZ, stateColor, stateAmplitude)

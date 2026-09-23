@@ -788,11 +788,18 @@ const SPACING = 2140;
 // ---------- 四个区：地图上各自聚集一堆 ----------
 // 区不新增档位，也不改几何：档位决定"用哪套模型"，区只决定"摆在地图哪一角"。
 // 默认按档位落区（ZONE_OF_TIER），设备行里那一格下拉可以逐台改写（d.zone 非空 = 手动指定）。
+// 四个区**同一个尺寸**：角铁要八对称，盒子必须全等，否则"分了区"会读成"四堆随机摆放"。
+// 这个数不是凑整数好看，是按最挤的一堆现量的：算力集群 4 台 = 3 列 × 1400 + 最宽的 E-ATX 桌面 999
+// → 3278 宽，两侧留余量到 4400；两行 × 行距 1800 + 最深桌面 787 → 2587 深，收到 3200。
+// 机器真实尺寸一个没动，动的只是"格子画多大"。
+const ZONE_FIELD = { w: 4400, d: 3200, h: 1150 };
+const ZONE_AISLE = 900;   // 两个盒子之间的过道
+const ZC = [(ZONE_FIELD.w + ZONE_AISLE) / 2, (ZONE_FIELD.d + ZONE_AISLE) / 2];
 const ZONES = [
-  { key: "compute", cn: "算力集群",   at: [-2900, -2500] },
-  { key: "edge",    cn: "终端设备区", at: [ 2900, -2500] },
-  { key: "storage", cn: "储存设备区", at: [-2900,  2500] },
-  { key: "net",     cn: "网络设备区", at: [ 2900,  2500] },
+  { key: "compute", cn: "算力集群",   at: [-ZC[0], -ZC[1]] },
+  { key: "edge",    cn: "终端设备区", at: [ ZC[0], -ZC[1]] },
+  { key: "storage", cn: "储存设备区", at: [-ZC[0],  ZC[1]] },
+  { key: "net",     cn: "网络设备区", at: [ ZC[0],  ZC[1]] },
 ];
 const ZONE_OF_TIER = {
   itx: "compute", matx: "compute", atx: "compute", eatx: "compute",
@@ -806,6 +813,88 @@ const zoneOf = (d) => ZONES.find((z) => z.key === zoneKeyOf(d));
 const CLUSTER_SPACING = 1400;
 const CLUSTER_ROW_GAP = 1800;
 const CLUSTER_PER_ROW = 3;
+
+// ---------- 区的壳：透明力场盒子 + 八角"木箱角铁" ----------
+// 参考那份是"区域 50×50×15"的米制场景写的：臂宽 0.15 = 区宽的 0.3%，臂长按区宽的 5% 给。
+// 这里 1 单位 = 1 mm，所以臂长那条比例（5%）照搬，截面两个数按比例换算：
+// 宽 0.3% × 4400 ≈ 13 mm、厚 0.16% × 4400 ≈ 7 mm —— 直接抄 0.15 会变成 0.15 mm，屏幕上根本不存在。
+// 另外参考里 bracketThk=0.08 那格其实没被用到（三根臂的截面都写的 bracketWid），
+// 这里补上：水平臂的截面走 宽 × 厚，才像一根扁角铁而不是一方木条。
+const BRACKET = { lenK: 0.05, wid: 13, inner: 9, thk: 7 };
+
+// 一个角 = 三根互相垂直的臂（沿 X / Y / Z），底部从地面上起、顶部从盒顶往下。
+// 返回的 Group 由调用方摆到区中心；材质挂在 userData.bracketMat 上，供换色与呼吸。
+function createCornerBrackets(width, depth, height, colorHex) {
+  const g = new THREE.Group();
+  const len = Math.max(60, width * BRACKET.lenK);
+  const w = BRACKET.wid, t = BRACKET.thk, wi = BRACKET.inner;
+  const mat = new THREE.MeshStandardMaterial({
+    color: colorHex, emissive: colorHex, emissiveIntensity: 0.06,
+    transparent: true, opacity: 0.22, roughness: 0.6, metalness: 0.8,
+    depthWrite: false,   // 半透明壳内部排序会乱，不写深度反而稳
+  });
+  const arm = (name, sx, sy, sz, x, y, z) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
+    m.name = name;
+    m.position.set(x, y, z);
+    g.add(m);
+  };
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const cx = (sx * width) / 2, cz = (sz * depth) / 2;
+    for (const top of [false, true]) {
+      // 垂直臂：底部贴地起、顶部从盒顶往下
+      arm('zone-bracket-v', w, len, w, cx, top ? height - len / 2 : len / 2, cz);
+      // 两根水平臂：截面比立柱窄（wi < w）、并且**但到立柱的内侧面上**，不外露重合面。
+      // 首版三根臂截面同宽、同从角点起，node 里点出来 16 处"同侧共面"——那就是本项目
+      // 一直在防的闪法（面贴面 = 深度缓冲里同一个深度）。现在：
+      //   · 臂的 x/z 面落在 ±wi/2，跟立柱的 ±w/2 不同一个平面；
+      //   · 臂的内端与立柱内侧面是 max↔min（面对面贴合），按判据属于良性；
+      //   · 两臂在 y 上也错开（y1 / y2），互不重叠。
+      const reach = len - w / 2;                      // 从立柱内侧面量到臂尖
+      const y1 = top ? height - t * 1.5 : t * 1.5;
+      const y2 = top ? height - t * 3.5 : t * 3.5;
+      arm('zone-bracket-x', reach, t, wi, cx - sx * (w / 2 + reach / 2), y1, cz);
+      arm('zone-bracket-z', wi, t, reach, cx, y2, cz - sz * (w / 2 + reach / 2));
+    }
+  }
+  g.userData.bracketMat = mat;
+  return g;
+}
+
+// 力场盒子本体：一层几乎看不出的面 + 一圈淡棱，双面 + 不写深度。
+// 这样它 tint 后面的一切但不遮、也不跟壳内任何件抢深度。
+function createZoneField(width, depth, height, colorHex) {
+  const g = new THREE.Group();
+  const face = new THREE.Mesh(
+    new THREE.BoxGeometry(width, height, depth),
+    new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.018,
+      depthWrite: false, side: THREE.DoubleSide }));
+  face.name = 'zone-field';
+  face.position.y = height / 2;
+  g.add(face);
+  const edge = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(width, height, depth)),
+    new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.085, depthWrite: false }));
+  edge.name = 'zone-field-edge';
+  edge.position.y = height / 2;
+  g.add(edge);
+  g.userData.fieldMat = face.material;
+  g.userData.edgeMat = edge.material;
+  return g;
+}
+
+// 区的颜色 = 这堆机器里最严重的那一档（谁都不亮时按空闲绿）：
+// 盒子跟着状态呼吸才有意义，否则它只是个装饰框。
+const ZONE_SEVERITY = { IDLE: 0, ACTIVE: 1, ALERT: 2 };
+function zoneLevel(mine) {
+  let best = null;
+  for (const h of mine) {
+    const k = (loads.get(h.id) || {}).key;
+    if (!k) continue;
+    if (!best || ZONE_SEVERITY[k] > ZONE_SEVERITY[best]) best = k;
+  }
+  return best || 'IDLE';
+}
 const OS_LABEL = { win: "Windows", linux: "Linux" };
 
 // 机身件走受光材质；屏幕 / 屏幕内容 / 电源灯走不受光材质，这样"亮"看起来是自己发光。
@@ -963,39 +1052,56 @@ function layoutClusters(built) {
   built.forEach((h, i) => { h.stag = (i % 2) * -50; });
 }
 
-// 每个区画一圈地面框 + 一块区名：没有这两样，"分了区"在屏幕上是不成立的，
-// 只有四堆机器各自挨着，看不出那是四个区还是摆歪了。
+// 每个区一个全等盒子 + 八角角铁 + 一块区名。没有这些，"分了区"在屏幕上是不成立的。
+// 角铁要"若有若无"：opacity 0.22 + 微弱自发光 0.06 呼吸，靠近了才看得出来是金属锚点。
 let zoneMarks = [];
 function clearZoneMarks() {
   for (const m of zoneMarks) {
-    scene.remove(m.line);
-    m.line.geometry.dispose();
-    m.line.material.dispose();
+    scene.remove(m.cell);
+    m.cell.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    m.cell.userData.bracketMat.dispose();
+    m.cell.userData.fieldMat.dispose();
+    m.cell.userData.edgeMat.dispose();
     m.div.remove();
   }
   zoneMarks = [];
 }
 function drawZoneMarks(built) {
-  const pad = 420;   // 框离机器留 420 mm，别贴着
   for (const z of ZONES) {
     const mine = built.filter((h) => h.zone === z.key);
-    if (!mine.length) continue;
-    const minX = Math.min(...mine.map((h) => h.x - h.hw)) - pad;
-    const maxX = Math.max(...mine.map((h) => h.x + h.hw)) + pad;
-    const minZ = Math.min(...mine.map((h) => h.z - h.hd)) - pad;
-    const maxZ = Math.max(...mine.map((h) => h.z + h.hd)) + pad;
-    const g = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(minX, 1, minZ), new THREE.Vector3(maxX, 1, minZ),
-      new THREE.Vector3(maxX, 1, maxZ), new THREE.Vector3(minX, 1, maxZ),
-    ]);
-    const line = new THREE.LineLoop(g, new THREE.LineBasicMaterial({ color: 0x303b47 }));
-    line.name = "zone-frame";
-    scene.add(line);
+    const cell = new THREE.Group();
+    cell.position.set(z.at[0], 0, z.at[1]);   // 盒子以区中心为原点，底面落在 y=0
+    const colorHex = STATES.find((st) => st.key === (mine.length ? zoneLevel(mine) : 'IDLE')).color;
+    const field = createZoneField(ZONE_FIELD.w, ZONE_FIELD.d, ZONE_FIELD.h, colorHex);
+    const brackets = createCornerBrackets(ZONE_FIELD.w, ZONE_FIELD.d, ZONE_FIELD.h, colorHex);
+    cell.add(field, brackets);
+    scene.add(cell);
+
+    // 溢出如实报：机器伸出盒子就是"格子画小了"，别让它悄悄穿帮
+    let overflow = 0;
+    for (const h of mine) {
+      const dx = Math.abs(h.x - z.at[0]), dz = Math.abs(h.z - z.at[1]);
+      if (dx + h.hw > ZONE_FIELD.w / 2 || dz + h.hd > ZONE_FIELD.d / 2 || h.upH > ZONE_FIELD.h) overflow++;
+    }
     const div = document.createElement("div");
     div.className = "zlbl";
-    div.textContent = z.cn + " · " + mine.length + " 台";
+    div.textContent = z.cn + " · " + mine.length + " 台" + (overflow ? " ⚠ 出格 " + overflow : "");
     document.body.appendChild(div);
-    zoneMarks.push({ line, div, at: new THREE.Vector3((minX + maxX) / 2, 1, maxZ + 300) });
+    zoneMarks.push({ cell, div, bracketMat: brackets.userData.bracketMat,
+      fieldMat: field.userData.fieldMat, edgeMat: field.userData.edgeMat,
+      at: new THREE.Vector3(z.at[0], ZONE_FIELD.h, z.at[1] + ZONE_FIELD.d / 2 + 320),
+      overflow, key: z.key, n: mine.length });
+  }
+}
+// 换档时只改三根材质的颜色，不重建几何
+function paintZoneColors() {
+  for (const m of zoneMarks) {
+    const mine = holders.filter((h) => h.zone === m.key);
+    const hex = STATES.find((st) => st.key === zoneLevel(mine)).color;
+    m.bracketMat.color.setHex(hex);
+    m.bracketMat.emissive.setHex(hex);
+    m.fieldMat.color.setHex(hex);
+    m.edgeMat.color.setHex(hex);
   }
 }
 
@@ -1766,6 +1872,7 @@ function setMonitorSetting(key, value) {
 let beatTimer = 0;
 function beat() {
   stepLoads(Date.now() / 1000);
+  paintZoneColors();   // 区的颜色 = 这堆里最严重的一档，跟分级同一来源
   paintPanel(true);
 }
 function startBeat() {
@@ -2447,7 +2554,7 @@ function moveTo(t, d) {
   want.dist = Math.min(30000, Math.max(1500, d));
   focusing = true;
 }
-function overview() { moveTo(OVERVIEW.target, OVERVIEW.dist); hidePerf(); pinLabel(null); }
+function overview() { fitOverview(); moveTo(OVERVIEW.target, OVERVIEW.dist); hidePerf(); pinLabel(null); }
 
 // 全景距离按"当前这张地图"实算，但有一条上限：台数加多不能一路退到机器变灰点。
 // 分区之后地图是二维摊开的（实测左右 8.9 m × 前后 6.6 m），所以横向按包围球半径算 ——
@@ -2455,8 +2562,12 @@ function overview() { moveTo(OVERVIEW.target, OVERVIEW.dist); hidePerf(); pinLab
 const MAX_READABLE = 12500;
 function fitOverview() {
   if (!holders.length) return;
+  // 地图边界现在由四个全等盒子决定（不是机器挨到哪儿算到哪儿）
   const b = new THREE.Box3();
-  for (const h of holders) b.expandByObject(h.holder);
+  for (const z of ZONES) {
+    b.expandByPoint(new THREE.Vector3(z.at[0] - ZONE_FIELD.w / 2, 0, z.at[1] - ZONE_FIELD.d / 2));
+    b.expandByPoint(new THREE.Vector3(z.at[0] + ZONE_FIELD.w / 2, ZONE_FIELD.h, z.at[1] + ZONE_FIELD.d / 2));
+  }
   const size = b.getSize(new THREE.Vector3());
   const center = b.getCenter(new THREE.Vector3());
   const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
@@ -2543,9 +2654,21 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
   // 分区读数：每台落在哪个区、区框在地面的范围、全景距离
   zones: () => devices.map((d) => d.short + "→" + zoneOf(d).cn + (d.zone ? "(手动)" : "(自动)")),
   zoneMarks: () => zoneMarks.map((m) => m.div.textContent),
+  // 全景读数：算出来的目标距离、当前距离、相机参数、雾、盒子尺寸（取景问题就查这格）
+  overview: () => ({ 目标距离: Math.round(OVERVIEW.dist), 当前距离: Math.round(dist), 聚焦中: focusing,
+    fov: camera.fov, aspect: +camera.aspect.toFixed(3), 地图半径: Math.round(new THREE.Box3().copy((()=>{const b=new THREE.Box3();for(const z of ZONES){b.expandByPoint(new THREE.Vector3(z.at[0]-ZONE_FIELD.w/2,0,z.at[1]-ZONE_FIELD.d/2));b.expandByPoint(new THREE.Vector3(z.at[0]+ZONE_FIELD.w/2,ZONE_FIELD.h,z.at[1]+ZONE_FIELD.d/2));}return b;})()).getBoundingSphere(new THREE.Sphere()).radius),
+    雾近: Math.round(scene.fog.near), 盒子: ZONE_FIELD, 区心: ZONES.map(z=>z.at.join(",")) }),
+  // 角铁读数：件数（8 角 × 3 臂 = 24）、材质参数、出格台数
+  brackets: () => zoneMarks.map((m) => {
+    let n = 0;
+    m.cell.traverse((o) => { if (o.isMesh && o.name.indexOf('zone-bracket') === 0) n++; });
+    return m.key + ' 角铁 ' + n + ' 件 · 出格 ' + m.overflow + ' 台 · op ' + m.bracketMat.opacity
+      + ' · em ' + m.bracketMat.emissiveIntensity.toFixed(3);
+  }),
 });
 
 document.getElementById("reset").addEventListener("click", () => {
+  fitOverview();   // 按当前窗口比例重算，别让上一次 resize 的瞬间值粘住
   focusing = false;
   hidePerf();
   pinLabel(null);
@@ -2632,6 +2755,9 @@ function tick() {
       + ((proj.x * 0.5 + 0.5) * window.innerWidth).toFixed(1) + "px,"
       + ((-proj.y * 0.5 + 0.5) * window.innerHeight + h.stag).toFixed(1) + "px)";
   }
+  // 角铁呼吸：自发光在 0.03~0.09 之间慢起伏，是"隐形的金属锚点"，不是警报灯
+  const breathe = 0.06 + Math.sin(clock.elapsedTime * 1.2) * 0.03;
+  for (const m of zoneMarks) m.bracketMat.emissiveIntensity = breathe;
   for (const m of zoneMarks) {   // 区名跟着地图走，跟设备标注同一套投影
     proj.copy(m.at).project(camera);
     if (proj.z > 1) { m.div.style.display = "none"; continue; }
