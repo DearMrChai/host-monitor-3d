@@ -814,72 +814,51 @@ const CLUSTER_SPACING = 1400;
 const CLUSTER_ROW_GAP = 1800;
 const CLUSTER_PER_ROW = 3;
 
-// ---------- 区的壳：透明力场盒子 + 八角"木箱角铁" ----------
-// 参考那份是"区域 50×50×15"的米制场景写的：臂宽 0.15 = 区宽的 0.3%，臂长按区宽的 5% 给。
-// 这里 1 单位 = 1 mm，所以臂长那条比例（5%）照搬，截面两个数按比例换算：
-// 宽 0.3% × 4400 ≈ 13 mm、厚 0.16% × 4400 ≈ 7 mm —— 直接抄 0.15 会变成 0.15 mm，屏幕上根本不存在。
-// 另外参考里 bracketThk=0.08 那格其实没被用到（三根臂的截面都写的 bracketWid），
-// 这里补上：水平臂的截面走 宽 × 厚，才像一根扁角铁而不是一方木条。
-const BRACKET = { lenK: 0.05, wid: 13, inner: 9, thk: 7 };
+// ---------- 区的角铁：八个角，"木箱角铁" ----------
+// 参考那份是按"区域 50×50×15"的米制场景写的，两条比例照搬、绝对值换算到 mm（本项目 1 单位 = 1 mm）：
+//   臂长 = 区宽 × 5%   → 4400 × 5% = 220 mm（参考里 bracketLen = width * 0.05）
+//   截面 = 区宽 × 0.3% → 4400 × 0.3% ≈ 13 mm（参考里 bracketWid = 0.15，占 50 的 0.3%）
+// 不直接抄 0.15：那是米制场景的数，搬到 mm 世界里是 0.15 mm，屏幕上不存在。
+// 参考里 bracketThk = 0.08 声明了却没进几何体（三根臂全用的 bracketWid），这里不替它发挥，三根臂同截面。
+const BRACKET = { lenK: 0.05, widK: 0.003 };
 
-// 一个角 = 三根互相垂直的臂（沿 X / Y / Z），底部从地面上起、顶部从盒顶往下。
+// 一个区 = 八个角（四角 × 上下两层），每个角三根臂（X / Y / Z 各一根）= 24 件。
+// 三根臂的落位全部写成"占哪一段"（X、Y、Z 各给一段区间），不写"中心 ± 半个长"——对齐能从数上直接读：
+//   立柱：横截面 = 角点 ± w/2，Y 从端面（贴地 / 贴盒顶面）往内量 len
+//   两根水平臂：截面与立柱同宽、Y 与立柱同层，内端顶在立柱的外侧面上（臂尖离角点仍是 len）
+// 参考那份三根臂都从角点起算、在角上互相插穿 —— 插穿会让两个同向的面同时存在，同一片像素叠两层色，
+// 角上会浮出一块比别处亮的补丁（本项目判据里的"同侧重合"）。这里只改这一件事：三件互不重叠、
+// 贴合面朝里（max 对 min，属良性）；臂长仍按"从角点量 len"算，看着跟参考一样长。
 // 返回的 Group 由调用方摆到区中心；材质挂在 userData.bracketMat 上，供换色与呼吸。
 function createCornerBrackets(width, depth, height, colorHex) {
   const g = new THREE.Group();
   const len = Math.max(60, width * BRACKET.lenK);
-  const w = BRACKET.wid, t = BRACKET.thk, wi = BRACKET.inner;
+  const w = Math.max(4, Math.round(width * BRACKET.widK));
   const mat = new THREE.MeshStandardMaterial({
     color: colorHex, emissive: colorHex, emissiveIntensity: 0.06,
     transparent: true, opacity: 0.22, roughness: 0.6, metalness: 0.8,
-    depthWrite: false,   // 半透明壳内部排序会乱，不写深度反而稳
+    depthWrite: false,   // 半透明件互相遮挡时写深度会花，不写反而稳
   });
-  const arm = (name, sx, sy, sz, x, y, z) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
+  // 一根臂 = X / Y / Z 上各占一段；尺寸与中点都从这六个数推出来
+  const seg = (name, x0, x1, y0, y1, z0, z1) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), mat);
     m.name = name;
-    m.position.set(x, y, z);
+    m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
     g.add(m);
   };
+  const lo = (a, b) => Math.min(a, b), hi = (a, b) => Math.max(a, b);
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
-    const cx = (sx * width) / 2, cz = (sz * depth) / 2;
+    const cx = (sx * width) / 2, cz = (sz * depth) / 2;     // 角点 = 盒子的角
+    const ix = cx - sx * (w / 2), iz = cz - sz * (w / 2);   // 立柱内侧面（水平臂顶在这里）
     for (const top of [false, true]) {
-      // 垂直臂：底部贴地起、顶部从盒顶往下
-      arm('zone-bracket-v', w, len, w, cx, top ? height - len / 2 : len / 2, cz);
-      // 两根水平臂：截面比立柱窄（wi < w）、并且**但到立柱的内侧面上**，不外露重合面。
-      // 首版三根臂截面同宽、同从角点起，node 里点出来 16 处"同侧共面"——那就是本项目
-      // 一直在防的闪法（面贴面 = 深度缓冲里同一个深度）。现在：
-      //   · 臂的 x/z 面落在 ±wi/2，跟立柱的 ±w/2 不同一个平面；
-      //   · 臂的内端与立柱内侧面是 max↔min（面对面贴合），按判据属于良性；
-      //   · 两臂在 y 上也错开（y1 / y2），互不重叠。
-      const reach = len - w / 2;                      // 从立柱内侧面量到臂尖
-      const y1 = top ? height - t * 1.5 : t * 1.5;
-      const y2 = top ? height - t * 3.5 : t * 3.5;
-      arm('zone-bracket-x', reach, t, wi, cx - sx * (w / 2 + reach / 2), y1, cz);
-      arm('zone-bracket-z', wi, t, reach, cx, y2, cz - sz * (w / 2 + reach / 2));
+      const vy0 = top ? height - len : 0, vy1 = top ? height : len;   // 立柱那一段：贴地或贴顶
+      const hy0 = top ? height - w : 0, hy1 = top ? height : w;       // 水平臂那一段：跟立柱同层
+      seg('zone-bracket-v', cx - w / 2, cx + w / 2, vy0, vy1, cz - w / 2, cz + w / 2);
+      seg('zone-bracket-x', lo(ix, cx - sx * len), hi(ix, cx - sx * len), hy0, hy1, cz - w / 2, cz + w / 2);
+      seg('zone-bracket-z', cx - w / 2, cx + w / 2, hy0, hy1, lo(iz, cz - sz * len), hi(iz, cz - sz * len));
     }
   }
   g.userData.bracketMat = mat;
-  return g;
-}
-
-// 力场盒子本体：一层几乎看不出的面 + 一圈淡棱，双面 + 不写深度。
-// 这样它 tint 后面的一切但不遮、也不跟壳内任何件抢深度。
-function createZoneField(width, depth, height, colorHex) {
-  const g = new THREE.Group();
-  const face = new THREE.Mesh(
-    new THREE.BoxGeometry(width, height, depth),
-    new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.018,
-      depthWrite: false, side: THREE.DoubleSide }));
-  face.name = 'zone-field';
-  face.position.y = height / 2;
-  g.add(face);
-  const edge = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.BoxGeometry(width, height, depth)),
-    new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.085, depthWrite: false }));
-  edge.name = 'zone-field-edge';
-  edge.position.y = height / 2;
-  g.add(edge);
-  g.userData.fieldMat = face.material;
-  g.userData.edgeMat = edge.material;
   return g;
 }
 
@@ -1052,7 +1031,8 @@ function layoutClusters(built) {
   built.forEach((h, i) => { h.stag = (i % 2) * -50; });
 }
 
-// 每个区一个全等盒子 + 八角角铁 + 一块区名。没有这些，"分了区"在屏幕上是不成立的。
+// 每个区：八角角铁（尺寸全等，所以八对称）+ 一块区名。角铁就是"这里有个格子"的全部证据——
+// 参考那份代码里本来也没有盒子面，我不该自己加一层力场。
 // 角铁要"若有若无"：opacity 0.22 + 微弱自发光 0.06 呼吸，靠近了才看得出来是金属锚点。
 let zoneMarks = [];
 function clearZoneMarks() {
@@ -1060,8 +1040,6 @@ function clearZoneMarks() {
     scene.remove(m.cell);
     m.cell.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     m.cell.userData.bracketMat.dispose();
-    m.cell.userData.fieldMat.dispose();
-    m.cell.userData.edgeMat.dispose();
     m.div.remove();
   }
   zoneMarks = [];
@@ -1072,9 +1050,8 @@ function drawZoneMarks(built) {
     const cell = new THREE.Group();
     cell.position.set(z.at[0], 0, z.at[1]);   // 盒子以区中心为原点，底面落在 y=0
     const colorHex = STATES.find((st) => st.key === (mine.length ? zoneLevel(mine) : 'IDLE')).color;
-    const field = createZoneField(ZONE_FIELD.w, ZONE_FIELD.d, ZONE_FIELD.h, colorHex);
     const brackets = createCornerBrackets(ZONE_FIELD.w, ZONE_FIELD.d, ZONE_FIELD.h, colorHex);
-    cell.add(field, brackets);
+    cell.add(brackets);
     scene.add(cell);
 
     // 溢出如实报：机器伸出盒子就是"格子画小了"，别让它悄悄穿帮
@@ -1088,7 +1065,6 @@ function drawZoneMarks(built) {
     div.textContent = z.cn + " · " + mine.length + " 台" + (overflow ? " ⚠ 出格 " + overflow : "");
     document.body.appendChild(div);
     zoneMarks.push({ cell, div, bracketMat: brackets.userData.bracketMat,
-      fieldMat: field.userData.fieldMat, edgeMat: field.userData.edgeMat,
       at: new THREE.Vector3(z.at[0], ZONE_FIELD.h, z.at[1] + ZONE_FIELD.d / 2 + 320),
       overflow, key: z.key, n: mine.length });
   }
@@ -1100,8 +1076,6 @@ function paintZoneColors() {
     const hex = STATES.find((st) => st.key === zoneLevel(mine)).color;
     m.bracketMat.color.setHex(hex);
     m.bracketMat.emissive.setHex(hex);
-    m.fieldMat.color.setHex(hex);
-    m.edgeMat.color.setHex(hex);
   }
 }
 
@@ -2665,6 +2639,22 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
     return m.key + ' 角铁 ' + n + ' 件 · 出格 ' + m.overflow + ' 台 · op ' + m.bracketMat.opacity
       + ' · em ' + m.bracketMat.emissiveIntensity.toFixed(3);
   }),
+  // 角铁是"若有若无"的细件，全景里只有一两像素，肉眼判断得有个能复现的机位。
+  // 这个钩子把相机摆到某个区"离原点更远那个角"的外侧对角线上，正对着这个角看：
+  //   __hm().cornerView("storage")   → 相机在角点外侧 2.4 m、俯角 1.2 rad，画面高 ≈ 1.8 m（角铁全高 1.15 m）
+  cornerView: (key) => {
+    const zz = ZONES.find((z) => z.key === key) || ZONES[0];
+    const ox = zz.at[0] + Math.sign(zz.at[0]) * ZONE_FIELD.w / 2;
+    const oz = zz.at[1] + Math.sign(zz.at[1]) * ZONE_FIELD.d / 2;
+    pinLabel(null); hidePerf(); focusing = false;
+    az = Math.atan2(ox, oz); pol = 1.2;
+    target.set(ox, ZONE_FIELD.h / 2, oz);
+    want.target.copy(target);
+    dist = want.dist = 2400;
+    applyCamera();
+    return { 区: zz.cn, 角点: [ox, oz], 距离: dist,
+      相机: [camera.position.x, camera.position.y, camera.position.z].map((v) => Math.round(v)) };
+  },
 });
 
 document.getElementById("reset").addEventListener("click", () => {
