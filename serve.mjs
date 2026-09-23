@@ -1,4 +1,4 @@
-// 原型本地服务：把设备清单存成同目录的 设备清单.json，页面上的编辑实时写回这个文件。
+// 原型本地服务：把设备清单存成同目录的 设备清单.json、分区表存成 分区.json，页面上的编辑实时写回这两个文件。
 // 零依赖，node 22 直接跑；只监听 127.0.0.1。
 //   node serve.mjs            → http://127.0.0.1:8123/monitor-wall.html
 // 为什么要有它：file:// 下浏览器不能写盘，"编辑同步修改配置文件"必须走一次本地 HTTP。
@@ -10,11 +10,15 @@ import path from "node:path";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const FILE = path.join(DIR, "设备清单.json");
+const ZFILE = path.join(DIR, "分区.json");
 const PORT = Number(process.env.PORT || 8123);
 const MAX_BYTES = 64 * 1024;
 const TIERS = new Set(["laptop", "matx", "atx", "eatx", "itx", "nas", "switch", "router"]);
-// 四个区。zone 留空 = 页面按档位自动落区，所以默认清单里全是空串。
-const ZONES = new Set(["compute", "edge", "storage", "net"]);
+// zone 留空 = 页面按档位自动落区，所以默认清单里全是空串。
+// 分区不再是固定那四个（2026-09-23）：设备上这一格只校验"长得像 key"，至于有没有这个区，
+// 由页面按 分区.json 自己判。这里写死名单的话，页面里新建的分区一落盘就被服端清成空串。
+const ZONE_KEY = /^[a-z0-9_-]{1,24}$/;
+const ZONE_MAX = 9;
 
 // 三台网络设备没有屏幕，os 那一格对它们不起作用，填 linux 只是别让下拉显示"Windows"那么别扭
 const DEFAULTS = [
@@ -37,10 +41,11 @@ function normalize(list) {
   for (const it of list.slice(0, 32)) {
     if (!it || typeof it !== "object") continue;
     const s = (v, n) => (typeof v === "string" ? v.slice(0, n) : "");
+    const zone = s(it.zone, 24);
     out.push({
       name: s(it.name, 24) || "(未命名)",
       tier: TIERS.has(it.tier) ? it.tier : "matx",
-      zone: ZONES.has(it.zone) ? it.zone : "",
+      zone: ZONE_KEY.test(zone) ? zone : "",
       power: it.power !== false,
       os: s(it.os, 8) === "linux" ? "linux" : "win",
       host: s(it.host, 64),
@@ -53,7 +58,7 @@ function normalize(list) {
 
 async function load() {
   if (!existsSync(FILE)) {
-    await save(DEFAULTS);
+    await save(FILE, DEFAULTS);
     return { source: "seeded", list: DEFAULTS };
   }
   try {
@@ -65,11 +70,42 @@ async function load() {
   }
 }
 
+// 分区表：服务端不预置内容（"默认四个区摆在哪"是页面的事，两处各写一份必然走散）。
+// 文件还没生成过就回 { list: null }，页面保持它内置的默认摆位，改一次才生成本文件。
+function normalizeZones(list) {
+  if (!Array.isArray(list)) return null;
+  const out = [];
+  const seen = new Set();
+  for (const it of list.slice(0, ZONE_MAX)) {
+    if (!it || typeof it !== "object") continue;
+    const key = typeof it.key === "string" ? it.key.slice(0, 24) : "";
+    const cn = typeof it.cn === "string" ? it.cn.slice(0, 12) : "";
+    const at = Array.isArray(it.at) ? it.at : [];
+    const x = Number(at[0]), z = Number(at[1]);
+    if (!ZONE_KEY.test(key) || seen.has(key)) continue;
+    if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+    if (Math.abs(x) > 100000 || Math.abs(z) > 100000) continue;   // 手改文件写个天文数字，页面全景会退到看不见
+    seen.add(key);
+    out.push({ key, cn: cn || ("分区 " + (out.length + 1)), at: [Math.round(x), Math.round(z)] });
+  }
+  return out.length ? out : null;
+}
+async function loadZones() {
+  if (!existsSync(ZFILE)) return { source: "none", list: null };
+  try {
+    const parsed = normalizeZones(JSON.parse(await readFile(ZFILE, "utf8")));
+    if (!parsed) return { source: "invalid", list: null };
+    return { source: "file", list: parsed };
+  } catch (e) {
+    return { source: "unreadable", list: null };
+  }
+}
+
 // 先写临时文件再改名：中途崩溃不会留下半个 JSON
-async function save(list) {
-  const tmp = FILE + ".tmp";
+async function save(file, list) {
+  const tmp = file + ".tmp";
   await writeFile(tmp, JSON.stringify(list, null, 2) + "\n", "utf8");
-  await rename(tmp, FILE);
+  await rename(tmp, file);
 }
 
 function send(res, code, body, type = "application/json; charset=utf-8") {
@@ -184,7 +220,30 @@ createServer(async (req, res) => {
         try {
           const list = normalize(JSON.parse(raw).list);
           if (!list) return send(res, 400, JSON.stringify({ error: "清单为空或格式不对" }));
-          await save(list);
+          await save(FILE, list);
+          send(res, 200, JSON.stringify({ ok: true, count: list.length }));
+        } catch (e) {
+          send(res, 400, JSON.stringify({ error: String(e.message || e) }));
+        }
+      });
+      return;
+    }
+    return send(res, 405, JSON.stringify({ error: "只支持 GET / PUT" }));
+  }
+  // 分区表（页面"分区设置"那一格）：独立文件、独立端点，改分区不碰设备清单
+  if (url.pathname === "/api/zones") {
+    if (req.method === "GET") {
+      const { source, list } = await loadZones();
+      return send(res, 200, JSON.stringify({ list, source }));
+    }
+    if (req.method === "PUT") {
+      let raw = "";
+      req.on("data", (c) => { raw += c; if (raw.length > MAX_BYTES) req.destroy(); });
+      req.on("end", async () => {
+        try {
+          const list = normalizeZones(JSON.parse(raw).list);
+          if (!list) return send(res, 400, JSON.stringify({ error: "分区表为空或格式不对" }));
+          await save(ZFILE, list);
           send(res, 200, JSON.stringify({ ok: true, count: list.length }));
         } catch (e) {
           send(res, 400, JSON.stringify({ error: String(e.message || e) }));

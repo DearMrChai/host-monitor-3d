@@ -77,6 +77,18 @@
   .chip.sim { color: #8b949e; }
   .chip.bad { color: #f85149; border-color: #4a1d1d; }
 
+  /* 设备列表上面那排分区选项卡：一个分区一格，跟"分区设置"同一份数据 */
+  .ztabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 0; }
+  .ztabs button { padding: 3px 9px; font-size: 11.5px; border-radius: 999px; }
+  .ztabs button.on { color: #e6edf3; border-color: #58a6ff; background: #132a44; }
+  .ztabs .zn { margin-left: 5px; opacity: .7; font-variant-numeric: tabular-nums; }
+
+  /* 分区设置：一行 = 名字 / X / Z / ◎定位 / 删除 */
+  .zrow { display: grid; grid-template-columns: 1fr 82px 82px auto auto; gap: 6px; align-items: center;
+    padding: 6px 0; border-top: 1px solid #21262d; }
+  .zrow.hd { border-top: 0; padding: 0 0 2px; }
+  .zrow.hd span { font-size: 10.5px; color: #6e7681; }
+
   #tip { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 10;
     width: min(460px, calc(100vw - 32px)); max-height: 70vh; overflow-y: auto; padding: 12px 14px;
     background: #161b22; border: 1px solid #30363d; border-radius: 10px;
@@ -234,6 +246,7 @@
     <div class="db">
       <nav class="rail" aria-label="设置分类">
         <button class="cat on" data-cat="dev" type="button">设备设置</button>
+        <button class="cat" data-cat="zone" type="button">分区设置</button>
         <button class="cat" data-cat="pulse" type="button">脉冲效果</button>
         <button class="cat" data-cat="mon" type="button">性能监控</button>
       </nav>
@@ -241,10 +254,22 @@
         <div class="ph"><b>设备列表</b><span class="cnt" id="dcount"></span><span class="grow"></span>
           <button id="dadd" class="mini" type="button">＋ 添加设备</button></div>
         <div class="netnote" id="cfgline">清单来源：读取中…</div>
+        <div id="ztabs" class="ztabs" role="tablist" aria-label="分区"></div>
         <div id="rows"></div>
-        <p class="fine">这台列表就是屏幕上那一排：改名 → 标注立刻跟着改；换档位 → 就地重建那台机器；
-           添加 / 删除 / ↑↓ 排序 → 场景里的台数和左右次序同步。
+        <p class="fine">先在上面的选项卡里选分区，再在这个分区里增删改：改名 → 标注立刻跟着改；换档位 → 就地重建那台机器；
+           「＋ 添加设备」加在当前选中的分区里；↑↓ 只跟同区的邻居换位（跨区换位在屏幕上什么都看不出来，
+           所以不跨）。把某台的"分区"下拉改成别的区，这台就从这个选项卡挪到那个选项卡。
            开机 = 屏幕亮 + 电源灯亮；系统决定屏幕内容（Windows 任务栏加窗口块 / Linux 终端文本行）。</p>
+      </section>
+      <section class="pane" id="cat-zone">
+        <div class="ph"><b>分区设置</b><span class="cnt" id="zcount"></span><span class="grow"></span>
+          <button id="zadd" class="mini" type="button">＋ 添加分区</button></div>
+        <div class="netnote" id="zline">分区表来源：读取中…</div>
+        <div id="zrows"></div>
+        <p class="fine">名字只是显示名，改它不动设备归属；X / Z 是这个分区中心在地面上的位置（毫米，X 向右为正、
+           Z 朝屏幕前方为正），改完角铁和里面的机器一起挪。◎ 把相机拉到这个分区上方。
+           删掉一个分区时，原来钉在这个区的设备回到"按档位自动落区"，不会跟着分区一起消失。
+           分区表存在同目录的 分区.json 里（与 设备清单.json 分开，改一个不覆盖另一个）。</p>
       </section>
       <section class="pane" id="cat-pulse">
         <div class="ph"><b>脉冲效果</b><span class="cnt">脚下那圈粒子</span></div>
@@ -785,28 +810,43 @@ let devices = [
 // 分区之后这个数只在"区里没有对应布局"时兜底用，实际摆位见下面 layoutZones()。
 const SPACING = 2140;
 
-// ---------- 四个区：地图上各自聚集一堆 ----------
-// 区不新增档位，也不改几何：档位决定"用哪套模型"，区只决定"摆在地图哪一角"。
+// ---------- 分区：地图上各自聚一堆 ----------
+// 区不新增档位，也不改几何：档位决定"用哪套模型"，区只决定"摆在地图哪一块"。
 // 默认按档位落区（ZONE_OF_TIER），设备行里那一格下拉可以逐台改写（d.zone 非空 = 手动指定）。
+// 分区不再是写死的四个（2026-09-23）：名字和 X/Z 在设置里的"分区设置"改，增删也在那儿，
+// 改动存进同目录的 分区.json。数组本身是长驻的同一个对象（ZONES.length = 0 再 push），
+// 别把它换成新数组 —— 下面一堆闭包和读点都抓着它。
 // 四个区**同一个尺寸**：角铁要八对称，盒子必须全等，否则"分了区"会读成"四堆随机摆放"。
 // 这个数不是凑整数好看，是按最挤的一堆现量的：算力集群 4 台 = 3 列 × 1400 + 最宽的 E-ATX 桌面 999
 // → 3278 宽，两侧留余量到 4400；两行 × 行距 1800 + 最深桌面 787 → 2587 深，收到 3200。
 // 机器真实尺寸一个没动，动的只是"格子画多大"。
 const ZONE_FIELD = { w: 4400, d: 3200, h: 1150 };
 const ZONE_AISLE = 900;   // 两个盒子之间的过道
+const ZONE_PITCH = ZONE_FIELD.d + ZONE_AISLE;   // 一排到下一排：挪一个数，整张图的推导跟着走
 const ZC = [(ZONE_FIELD.w + ZONE_AISLE) / 2, (ZONE_FIELD.d + ZONE_AISLE) / 2];
+// 默认摆位（2026-09-23 按你指的方位重排）：算力不动；储存换到原终端那格；网络挪到原储存/原网络
+// 的中间；终端再往前（+Z，朝观众那一侧）一整个间距，落在中间那排的正前方。
+// 全是"默认值"不是"定案值"——分区设置里改一个数就能挪，改完存 分区.json。
 const ZONES = [
   { key: "compute", cn: "算力集群",   at: [-ZC[0], -ZC[1]] },
-  { key: "edge",    cn: "终端设备区", at: [ ZC[0], -ZC[1]] },
-  { key: "storage", cn: "储存设备区", at: [-ZC[0],  ZC[1]] },
-  { key: "net",     cn: "网络设备区", at: [ ZC[0],  ZC[1]] },
+  { key: "storage", cn: "储存设备区", at: [ ZC[0], -ZC[1]] },
+  { key: "net",     cn: "网络设备区", at: [ 0,      ZC[1]] },
+  { key: "edge",    cn: "终端设备区", at: [ 0, ZC[1] + ZONE_PITCH] },
 ];
+const ZONE_KEY_RE = /^[a-z0-9_-]{1,24}$/;
+const ZONE_MAX = 9;   // 地皮是 3 列 × 5 行候选位，9 个到顶：再多就不是"分区"是"撒豆子"了
 const ZONE_OF_TIER = {
   itx: "compute", matx: "compute", atx: "compute", eatx: "compute",
   laptop: "edge", nas: "storage", switch: "net", router: "net",
 };
-const zoneKeyOf = (d) => (ZONES.some((z) => z.key === d.zone) ? d.zone : (ZONE_OF_TIER[d.tier] || "compute"));
-const zoneOf = (d) => ZONES.find((z) => z.key === zoneKeyOf(d));
+// 档位 → 区 的自动映射要能扛住"那个区被删了"：映射目标不在了就退到第一个区，
+// 不能让设备因为一个分区没了就从屏幕上消失。
+const zoneKeyOf = (d) => {
+  if (ZONES.some((z) => z.key === d.zone)) return d.zone;
+  const auto = ZONE_OF_TIER[d.tier];
+  return ZONES.some((z) => z.key === auto) ? auto : ZONES[0].key;
+};
+const zoneOf = (d) => ZONES.find((z) => z.key === zoneKeyOf(d)) || ZONES[0];
 // 区内排布：一行最多 3 台、间隔 1400 mm（5.6 格），满了换行。
 // 为什么不是原来那一排的 2140：四台算力按 2140 排就是一堆 6.4 m 宽，四堆摆一起地图要 14 m，
 // 全景退到那个量级机器又变灰点了。要更疏/回到 2140，只改这两个常量。
@@ -1039,7 +1079,7 @@ function clearZoneMarks() {
   for (const m of zoneMarks) {
     scene.remove(m.cell);
     m.cell.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
-    m.cell.userData.bracketMat.dispose();
+    m.bracketMat.dispose();
     m.div.remove();
   }
   zoneMarks = [];
@@ -2176,7 +2216,13 @@ function textField(kind, value, placeholder, onInput) {
 
 function renderList() {
   rowsBox.textContent = "";
-  devices.forEach((d, i) => {
+  // 只画当前分区；i 始终是 devices 里的全局下标（删除 / 换位都按它算，不再翻译一次）
+  const mine = devices.map((d, i) => ({ d, i })).filter((o) => zoneKeyOf(o.d) === curZone);
+  if (!mine.length) {
+    rowsBox.append(el("div", "netnote", "这个分区里还没有设备 —— 右上角「＋ 添加设备」加的就是当前选中的这个分区。"));
+  }
+  mine.forEach((o, k) => {
+    const d = o.d, i = o.i;
     const det = el("details", "dev");
     det.open = openId === d.id;
 
@@ -2193,17 +2239,18 @@ function renderList() {
     const up = mini("↑", "上移（左移一位）");
     const dn = mini("↓", "下移（右移一位）");
     const del = mini("删除", "把这台的 3D 移掉", "del");
-    up.disabled = i === 0;
-    dn.disabled = i === devices.length - 1;
+    up.disabled = k === 0;
+    dn.disabled = k === mine.length - 1;
     // summary 里的按钮要拦住默认行为，否则点一下反而把这台展开了
     loc.addEventListener("click", (e) => { e.preventDefault(); const h = holderOf(d); if (h) focusStation(h); });
-    up.addEventListener("click", (e) => { e.preventDefault(); moveDev(i, i - 1); });
-    dn.addEventListener("click", (e) => { e.preventDefault(); moveDev(i, i + 1); });
+    up.addEventListener("click", (e) => { e.preventDefault(); moveInZone(i, -1); });
+    dn.addEventListener("click", (e) => { e.preventDefault(); moveInZone(i, 1); });
     del.addEventListener("click", (e) => {
       e.preventDefault();
       if (openId === d.id) openId = null;
       devices.splice(i, 1);
       sync();
+      touch();
     });
     ops.append(loc, up, dn, del);
     sum.append(el("span", "caret"), sumName, tierChip, zoneChip, pwChip, addrChip, el("span", "grow"), ops);
@@ -2309,20 +2356,27 @@ function renderList() {
     rowsBox.append(det);
   });
   for (const d of devices) applyState(d);
-  countEl.textContent = devices.length + " 台 · 屏幕上也是这 " + devices.length + " 台";
+  const zn = (ZONES.find((z) => z.key === curZone) || ZONES[0]).cn;
+  countEl.textContent = zn + " " + mine.length + " 台 · 全部 " + devices.length + " 台";
 }
 
-function moveDev(i, to) {
-  if (to < 0 || to >= devices.length) return;
-  const [d] = devices.splice(i, 1);
-  devices.splice(to, 0, d);
-  sync();
+// ↑↓ 只跟"同一个区里的邻居"换位：区各摆各的，跨区换位在屏幕上一点变化都看不出来，
+// 那会被读成"按钮坏了"。换成对调而不是搬移，设备的 id 不动（性能看板盯着的那台不会掉线）。
+function moveInZone(i, dir) {
+  const zk = zoneKeyOf(devices[i]);
+  for (let j = i + dir; j >= 0 && j < devices.length; j += dir) {
+    if (zoneKeyOf(devices[j]) !== zk) continue;
+    const t = devices[i]; devices[i] = devices[j]; devices[j] = t;
+    sync();
+    return;
+  }
 }
 
-// 列表动一处，场景重造一遍：改档 / 加台 / 删台 / 排序都会走到这里
+// 列表动一处，场景重造一遍：改档 / 加台 / 删台 / 换区 / 排序都会走到这里
 function sync() {
   if (perfDev && !devices.includes(perfDev)) hidePerf();
   rebuild();
+  renderTabs();
   renderList();
   for (const d of devices) applyState(d);
   if (perfDev) refreshPerfHead();
@@ -2342,8 +2396,11 @@ document.getElementById("dlgx").addEventListener("click", () => setDialog(false)
 mask.addEventListener("pointerdown", (e) => { if (e.target === mask) setDialog(false); });
 window.addEventListener("keydown", (e) => { if (e.key === "Escape" && !mask.hidden) setDialog(false); });
 document.getElementById("dadd").addEventListener("click", () => {
-  devices.push(mkDev("设备 " + (seq + 1), "matx"));
+  const d = mkDev("设备 " + (seq + 1), "matx");
+  d.zone = curZone;   // 加在"当前选项卡"这个分区里，不是加完还得去别的区找
+  devices.push(d);
   sync();
+  touch();
 });
 
 // ---------- 设置弹窗：左侧分类导轨 + 右侧三块面板 ----------
@@ -2424,7 +2481,8 @@ function setCfgLine() {
     : "没连上本地文件（现在是 file:// 打开？）：编辑只在内存里，刷新即丢。要落盘请跑 node serve.mjs，再开 http://127.0.0.1:8123/";
 }
 function toFileList() {
-  return devices.map((d) => ({ name: d.short, tier: d.tier, power: d.power, os: d.os, host: d.host, user: d.user, pass: d.pass }));
+  return devices.map((d) => ({ name: d.short, tier: d.tier, zone: d.zone, power: d.power, os: d.os,
+    host: d.host, user: d.user, pass: d.pass }));
 }
 async function saveNow() {
   try {
@@ -2472,8 +2530,174 @@ async function loadDevices() {
   setCfgLine();
 }
 
-// ---------- 开机设备脚下的脉冲已上移到"性能看板结束"之前（要在地面网格与 holders 之后、
-// 设置弹窗之前，因为它得先把 PULSE_SETTINGS 摆好，弹窗那三段滑杆才读得到初值）----------
+// ---------- 分区 ↔ 本地 分区.json ----------
+// 为什么单独一个文件：改分区名不该顺手把八台机器的连接信息重写一遍。
+// 文件里只认 key / cn / at 三样：key 是内部标识（设备的 d.zone 指的就是它），改名不动 key，
+// 所以"改分区名"永远不会把已经钉在这个区里的设备弄丢。
+const ZONE_API = "/api/zones";
+const ZONE_FILE = "分区.json";
+const tabsBox = document.getElementById("ztabs");
+const zRowsBox = document.getElementById("zrows");
+const zCountEl = document.getElementById("zcount");
+const zLine = document.getElementById("zline");
+let curZone = ZONES[0].key;   // 设备列表当前选中的分区
+let zMode = "内存";
+let zTimer = 0;
+
+function setZLine() {
+  zLine.textContent = zMode === "文件"
+    ? "分区表已接到本地文件 " + ZONE_FILE + "（改一次才生成）· 改名 / 挪位 / 增删即写回"
+    : "没连上本地文件（现在是 file:// 打开？）：分区改动只在内存里，刷新即丢。要落盘请跑 node serve.mjs，再开 http://127.0.0.1:8123/";
+}
+const zonesToFile = () => ZONES.map((z) => ({ key: z.key, cn: z.cn, at: z.at }));
+async function saveZones() {
+  try {
+    const r = await fetch(ZONE_API, { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ list: zonesToFile() }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  } catch (e) {
+    zMode = "内存";
+    zLine.textContent = "写入 " + ZONE_FILE + " 失败：" + e.message + "（分区改动只在内存里）";
+    return;
+  }
+  setZLine();
+}
+function touchZones() {
+  if (!booted || zMode !== "文件") return;
+  clearTimeout(zTimer);
+  zTimer = setTimeout(saveZones, 400);
+}
+function zonesFromFile(list) {
+  const out = [];
+  const seen = new Set();
+  for (const it of (Array.isArray(list) ? list : []).slice(0, ZONE_MAX)) {
+    if (!it || typeof it !== "object") continue;
+    const key = typeof it.key === "string" ? it.key.slice(0, 24) : "";
+    const x = Number(it.at && it.at[0]), z = Number(it.at && it.at[1]);
+    if (!ZONE_KEY_RE.test(key) || seen.has(key) || !Number.isFinite(x) || !Number.isFinite(z)) continue;
+    seen.add(key);
+    out.push({ key, cn: String(it.cn || "").slice(0, 12) || ("分区 " + (out.length + 1)),
+      at: [Math.round(x), Math.round(z)] });
+  }
+  return out.length ? out : null;
+}
+async function loadZones() {
+  if (location.protocol === "file:") { zMode = "内存"; setZLine(); return; }
+  try {
+    const r = await fetch(ZONE_API, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    const list = zonesFromFile(j.list);   // 文件还没生成过就是 null：保持页面内置的那套默认摆位
+    if (list) { ZONES.length = 0; for (const z of list) ZONES.push(z); }
+    zMode = "文件";
+  } catch (e) {
+    zMode = "内存";
+  }
+  setZLine();
+}
+
+// 设备列表上面那排选项卡：一格一个分区，数字是这区里的台数（点它只筛列表，不动场景）
+function renderTabs() {
+  tabsBox.textContent = "";
+  if (!ZONES.some((z) => z.key === curZone)) curZone = ZONES[0].key;
+  for (const z of ZONES) {
+    const n = devices.filter((d) => zoneKeyOf(d) === z.key).length;
+    const b = el("button", "zt" + (z.key === curZone ? " on" : ""));
+    b.type = "button";
+    b.title = z.cn + " · " + n + " 台（只筛列表，不动场景）";
+    b.append(el("span", null, z.cn), el("span", "zn", String(n)));
+    b.addEventListener("click", () => {
+      curZone = z.key;
+      renderTabs();
+      renderList();
+    });
+    tabsBox.append(b);
+  }
+}
+
+// 分区设置：一行 = 名字 / X / Z / ◎定位 / 删除。结构变了（增删）整块重画，
+// 改名和挪位是原地的：输入框不能被自己重画掉，不然打一个字就丢焦点。
+function renderZones() {
+  zRowsBox.textContent = "";
+  const hd = el("div", "zrow hd");
+  hd.append(el("span", null, "分区名"), el("span", null, "X（mm）"), el("span", null, "Z（mm）"),
+    el("span"), el("span"));
+  zRowsBox.append(hd);
+  ZONES.forEach((z, idx) => {
+    const row = el("div", "zrow");
+    const nm = textField("text", z.cn, "分区名", (v) => {
+      z.cn = v.trim() || "(未命名)";
+      sync();   // 场上的区名标注、列表里的分区下拉、选项卡都跟着改
+    });
+    nm.maxLength = 12;
+    nm.title = "分区名（显示名；设备的归属跟着 key 走，改名不动归属）";
+    const loc = mini("◎", "把相机拉到这个分区上方（挪完位置想看效果就点它）");
+    loc.addEventListener("click", () => {
+      pinLabel(null); hidePerf();
+      moveTo(new THREE.Vector3(z.at[0], ZONE_FIELD.h / 2, z.at[1]), ZONE_FIELD.w * 1.25);
+    });
+    const del = mini("删除", ZONES.length > 1
+      ? "删掉这个分区；原来钉在这个区的设备回到「按档位自动落区」"
+      : "最后一个分区不能删（设备得有地方待）", "del");
+    del.disabled = ZONES.length <= 1;
+    del.addEventListener("click", () => {
+      const gone = z.key;
+      ZONES.splice(idx, 1);
+      for (const d of devices) if (d.zone === gone) d.zone = "";   // 别让设备跟着分区一起消失
+      if (curZone === gone) curZone = ZONES[0].key;
+      renderZones();
+      sync();
+      touch();        // 设备的 zone 被清过，清单也要跟着写一次，别让内存和文件各说各的
+      touchZones();
+    });
+    row.append(nm, numField(z, 0, "分区中心的 X（世界单位 = 毫米，向右为正）"),
+      numField(z, 1, "分区中心的 Z（毫米，朝屏幕前方为正）"), loc, del);
+    zRowsBox.append(row);
+  });
+  zCountEl.textContent = ZONES.length + " 个分区";
+}
+function numField(z, k, title) {
+  const i = el("input", "tx");
+  i.type = "number";
+  i.step = 50;
+  i.value = Math.round(z.at[k]);
+  i.title = title;
+  i.addEventListener("input", () => {
+    if (i.value.trim() === "") return;   // 敲到一半的空框当 0 会把分区甩到原点
+    const v = Number(i.value);
+    if (!Number.isFinite(v)) return;
+    z.at[k] = Math.round(v);
+    sync();
+    touchZones();
+  });
+  return i;
+}
+function newZoneKey() {
+  for (let n = 1; ; n++) if (!ZONES.some((z) => z.key === "zone" + n)) return "zone" + n;
+}
+// 新分区落在第一个空着的候选位（3 列 × 5 行，够 ZONE_MAX 个用）
+function freeSpot() {
+  const px = ZONE_FIELD.w + ZONE_AISLE, pz = ZONE_FIELD.d + ZONE_AISLE;
+  for (const gz of [0, -1, 1, -2, 2]) for (const gx of [0, -1, 1]) {
+    const x = gx * px, z = gz * pz;
+    if (!ZONES.some((q) => Math.abs(q.at[0] - x) < 200 && Math.abs(q.at[1] - z) < 200)) return [x, z];
+  }
+  return [0, ZC[1] + 3 * ZONE_PITCH];
+}
+document.getElementById("zadd").addEventListener("click", () => {
+  if (ZONES.length >= ZONE_MAX) {
+    zLine.textContent = "最多 " + ZONE_MAX + " 个分区（地皮是 3 × 3 格，再多就摆不出不重叠的位置了）";
+    return;
+  }
+  const [x, z] = freeSpot();
+  const zz = { key: newZoneKey(), cn: "新分区 " + (ZONES.length + 1), at: [x, z] };
+  ZONES.push(zz);
+  curZone = zz.key;   // 视线跟着新分区走
+  renderZones();
+  sync();
+  touchZones();
+});
 // 启动（loadDevices + sync）挪到文件末尾了：sync 会走到 fitOverview，那要读 OVERVIEW / HOME，
 // 放在它们声明之前就是 TDZ 崩页 —— 这一类错前一版已经踩过一次（liveOf）。
 
@@ -2531,9 +2755,10 @@ function moveTo(t, d) {
 function overview() { fitOverview(); moveTo(OVERVIEW.target, OVERVIEW.dist); hidePerf(); pinLabel(null); }
 
 // 全景距离按"当前这张地图"实算，但有一条上限：台数加多不能一路退到机器变灰点。
-// 分区之后地图是二维摊开的（实测左右 8.9 m × 前后 6.6 m），所以横向按包围球半径算 ——
-// 宁可保守也别切掉一个区。上限 12500 是"四个区一眼看全"的量级，再远就不如滚轮自己拉。
-const MAX_READABLE = 12500;
+// 分区之后地图是二维摊开的（默认摆位下左右 9.7 m × 前后 11.4 m），所以横向按包围球半径算 ——
+// 宁可保守也别切掉一个区。上限 16000 是"这张图一眼看全"的量级（16:9 实算约 13000 就够），
+// 窗口更窄时允许裁掉边角，但不许一路退到机器变灰点；真要更远，滚轮自己拉。
+const MAX_READABLE = 16000;
 function fitOverview() {
   if (!holders.length) return;
   // 地图边界现在由四个全等盒子决定（不是机器挨到哪儿算到哪儿）
@@ -2627,6 +2852,8 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
   pulseLabels: () => holders.map((h) => h.stateLine.textContent + " [" + h.stateLine.className + "]"),
   // 分区读数：每台落在哪个区、区框在地面的范围、全景距离
   zones: () => devices.map((d) => d.short + "→" + zoneOf(d).cn + (d.zone ? "(手动)" : "(自动)")),
+  zoneTable: () => ZONES.map((z) => z.key + " " + z.cn + " @" + z.at.join(",")
+    + " · " + devices.filter((d) => zoneKeyOf(d) === z.key).length + " 台"),
   zoneMarks: () => zoneMarks.map((m) => m.div.textContent),
   // 全景读数：算出来的目标距离、当前距离、相机参数、雾、盒子尺寸（取景问题就查这格）
   overview: () => ({ 目标距离: Math.round(OVERVIEW.dist), 当前距离: Math.round(dist), 聚焦中: focusing,
@@ -2644,8 +2871,10 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
   //   __hm().cornerView("storage")   → 相机在角点外侧 2.4 m、俯角 1.2 rad，画面高 ≈ 1.8 m（角铁全高 1.15 m）
   cornerView: (key) => {
     const zz = ZONES.find((z) => z.key === key) || ZONES[0];
-    const ox = zz.at[0] + Math.sign(zz.at[0]) * ZONE_FIELD.w / 2;
-    const oz = zz.at[1] + Math.sign(zz.at[1]) * ZONE_FIELD.d / 2;
+    // 分区的 X/Z 可以是 0（默认摆位里就有两个），Math.sign(0) = 0 会把相机摆到盒子的棱上，
+    // 得落在角点外侧才看得见角铁，所以这里取 ±1 而不是符号函数
+    const ox = zz.at[0] + (zz.at[0] >= 0 ? 1 : -1) * ZONE_FIELD.w / 2;
+    const oz = zz.at[1] + (zz.at[1] >= 0 ? 1 : -1) * ZONE_FIELD.d / 2;
     pinLabel(null); hidePerf(); focusing = false;
     az = Math.atan2(ox, oz); pol = 1.2;
     target.set(ox, ZONE_FIELD.h / 2, oz);
@@ -2760,8 +2989,11 @@ function tick() {
 }
 // 启动放在所有声明之后：sync → rebuild → fitOverview 要读 OVERVIEW / HOME，
 // 放在它们前面就是 TDZ 崩页（同一类错这一版已经踩过 liveOf 一次）。
+// 分区必须先于设备读：设备清单里的 zone 要对着"当前这套分区"验，反过来就全被当成手动钉的又不存在的区。
+await loadZones();
 await loadDevices();
 sync();
+renderZones();
 booted = true;
 target.copy(OVERVIEW.target);
 dist = OVERVIEW.dist;   // 首屏就按"当前这一排"取景，不是按当初五台时凑的 9000
