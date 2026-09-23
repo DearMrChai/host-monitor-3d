@@ -28,6 +28,17 @@ npm start              # http://127.0.0.1:8123/monitor-wall.html
 `设置.json`，墙上 5 秒内自己跟上。
 `设备清单.json` 含明文口令，是拷过去的那一份里唯一敏感的东西 —— 别转发、别截图。
 
+Windows 上当看板那台要注意一件事：**在 SSH 会话里直接起 `node serve.mjs`，会话一断进程就跟着被收走**
+（现象是浏览器里 `ERR_CONNECTION_REFUSED`，日志停在启动那几行）。要让它活下来得让 WMI 去建进程：
+
+```powershell
+$line = 'cmd.exe /c cd /d "C:\看板目录" && node serve.mjs >> "C:\看板目录\服务日志.txt" 2>&1'
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $line }
+```
+
+另开一个会话查 `netstat -ano | findstr 127.0.0.1:8123` 能看到 LISTENING 才算真起来了。
+**没有做开机自启**：那台上的墙在它重启后不会自己回来，得再起一次（要自启就自己加一条计划任务）。
+
 ## 两页各管什么
 
 | 文件 | 是什么 | 看什么 |
