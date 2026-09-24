@@ -23,9 +23,10 @@ npm start              # http://127.0.0.1:8123/monitor-wall.html
 import 本地模块，所以双击打不开 —— 双击的话状态条上会直接写出这句话和该跑的命令。
 另一页 `silhouette-shelf.html`（剪影架）仍然可以双击：它嵌的是内联副本，代价是那一份得靠 `npm run check` 重灌。
 
-**部署成一块看板**（就一台机器自己看的那屏）：把整个目录拷过去（`monitor-wall.html`、`serve.mjs`、
+**部署成一块看板**（就一台机器自己看的那屏）：把整个目录拷过去（`monitor-wall.html`、`serve.mjs`、`probe/`、
 `src/`、两份 `*-geometry.mjs`、`devices.json`、`settings.json`、`node_modules/`），在那台上 `node serve.mjs`，用它的浏览器开
-`http://127.0.0.1:8123/monitor-wall.html`。服务只监听 127.0.0.1，所以看板只能在那台机器本机打开 ——
+`http://127.0.0.1:8123/monitor-wall.html`。少带 `probe/` 那一格，`serve.mjs` 会在 import 期就起不来（它俩是硬 import）。
+服务只监听 127.0.0.1，所以看板只能在那台机器本机打开 ——
 这正好：一块墙上的屏不该被别人从别的机器上看。之后调参数不用去碰那台的浏览器，直接改它目录里的
 `settings.json`，墙上 5 秒内自己跟上。
 `devices.json` 含明文口令，是拷过去的那一份里唯一敏感的东西 —— 别转发、别截图。
@@ -101,8 +102,10 @@ src/ground.mjs         地面层：脚下脉冲 + 点阵涟漪地形 + 二进制
 src/settings-ui.mjs    设置层：齿轮弹窗五块面板 + 三份 JSON 的读写与防抖（读→夹取→应用→写盘只这一处；页面的探针/心跳/相机三个动作由 initSettings 注入，T5 刀7）
 monitor-wall.html      监控墙原型（几何、three、状态都是真 import，所以必须经 serve.mjs 打开）
 silhouette-shelf.html  剪影架原型（嵌内联副本，可 file:// 双击）
-serve.mjs              本地服务：清单 / 分区 / 设置 三个文件的读写 + SSH 探一帧（Windows 走 PowerShell，Linux 走 sh）
-check.mjs              一条命令的自检：语法（HTML 里那段模块体 + 根目录与 src/ 全部 .mjs）→ 注入 → 几何校验
+serve.mjs              本地服务：清单 / 分区 / 设置 三个文件的读写 + SSH 探一帧（两段探针正文在 probe/，契约与解析还在这儿）
+probe/probe-linux.mjs  抓一帧 · linux 那套 sh 脚本正文（整段走 stdin，给远端 shell 看的，与 serve.mjs 零共用符号，T5 step5）
+probe/probe-win.mjs    抓一帧 · Windows 那套 PowerShell 脚本正文（必须是单行，理由写在这两个文件的头上，T5 step5）
+check.mjs              一条命令的自检：语法（HTML 里那段模块体 + 根目录、src/ 与 probe/ 全部 .mjs）→ 注入 → 几何校验
 inject-geometry.mjs    把 chassis-geometry.mjs 灌进剪影架那一页（只有它还吃内联副本）
 verify-geometry.mjs    六节校验：① 监控墙 import 齐 + 状态层 node 侧可跑（8 台 / 4 区 / 8 档）+ 剪影架可跑 / ② 内联 vs 源逐件比对 / 规格包围盒 / 同侧重合 / 正面射线 / 局部系复核
 verify-brackets.mjs    角铁自检（`node verify-brackets.mjs`）：从页面里抠出那段，量 24 件臂长 / 体积重叠 / 同侧重合 / 换尺寸复跑；屏上对应 `__hm().cornerView(key)`

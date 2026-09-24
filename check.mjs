@@ -24,10 +24,12 @@ const a = html.indexOf('<script type="module">');
 const body = html.slice(a + '<script type="module">'.length, html.indexOf('</script>', a));
 check('monitor-wall.html 模块体', body, '_check_wall.mjs');
 
-// 根目录 + src/ 下的 .mjs 全过一遍：拆出去的每一刀都自动进门，不用改这里
+// 根目录 + src/ + probe/ 下的 .mjs 全过一遍：拆出去的每一刀都自动进门，不用改这里
+// （目录在加，扫描的清单也得跟着加 —— 2026-09-24 step5 把两段抓机器的脚本搬进 probe/ 时才撞见这条）
 const modFiles = [
   ...readdirSync('.').filter((x) => x.endsWith('.mjs')),
   ...readdirSync('src').filter((x) => x.endsWith('.mjs')).map((x) => 'src/' + x),
+  ...readdirSync('probe').filter((x) => x.endsWith('.mjs')).map((x) => 'probe/' + x),
 ];
 for (const f of modFiles) {
   if (f === 'check.mjs' || f.startsWith('_check_')) continue;
