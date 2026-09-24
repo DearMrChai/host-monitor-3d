@@ -2,15 +2,15 @@
 node_modules/
 
 # ⚠ 敏感：明文 SSH 口令（用户 2026-09-23 明确许可落盘，但只许留在本机）
-#   这份永远不进 git。仓库里只有 设备清单.example.json（凭据全空）。
-设备清单.json
+#   这份永远不进 git。仓库里只有 devices.example.json（凭据全空）。
+devices.json
 # 分区表：本机摆位（默认摆位写在 monitor-wall.html 里，这份是"改过"的版本，不进仓库）
-分区.json
+zones.json
 # 设置（脉冲 / 地面与雨 / 采集频率）：同理，默认值写在 monitor-wall.html 里。
 # 进仓库的话，本地拖一次滑块就把工作区弄脏了；部署时要改，直接改部署目录里的这一份。
-设置.json
+settings.json
 # 谁连过哪台机器：本机审计用，不外传
-探测记录.log
+probe.log
 
 # 校验脚本跑出来的临时内联模块
 _inline_*.mjs

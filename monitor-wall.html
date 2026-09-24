@@ -287,7 +287,7 @@
         <p class="fine">名字只是显示名，改它不动设备归属；X / Z 是这个分区中心在地面上的位置（毫米，X 向右为正、
            Z 朝屏幕前方为正），改完角铁和里面的机器一起挪。◎ 把相机拉到这个分区上方。
            删掉一个分区时，原来钉在这个区的设备回到"按档位自动落区"，不会跟着分区一起消失。
-           分区表存在同目录的 分区.json 里（与 设备清单.json 分开，改一个不覆盖另一个）。</p>
+           分区表存在同目录的 zones.json 里（与 devices.json 分开，改一个不覆盖另一个）。</p>
       </section>
       <section class="pane" id="cat-pulse">
         <div class="ph"><b>脉冲效果</b><span class="cnt">脚下那圈粒子</span><span class="grow"></span>
@@ -295,7 +295,7 @@
         <div id="pulseRows"></div>
         <p class="fine">「脉冲 开／关」是总开关：关掉的那一刻还在飞的粒子一起清掉，屏幕上立刻干净，
            再打开会重新错开相位发（不会补一轮齐发）。开关和下面四格都是实时生效，
-           值写回同目录 设置.json（没起本地服务时退回落浏览器 localStorage，见标题那行）。
+           值写回同目录 settings.json（没起本地服务时退回落浏览器 localStorage，见标题那行）。
            脉冲只从"开机"的设备脚下发出；颜色与节奏由分级决定：空闲＝绿·3.0s·单发，
            活跃＝黄·2.0s·双发，高负载＝红·1.2s·三连发（阈值见 docs/尺寸与实测.md 第八节，要改说一声）。
            参考里那层 UnrealBloom 辉光没带过来 —— 派单禁止引 three 的 examples/，
@@ -318,7 +318,7 @@
            拉大则点手拉手连成一片。点是加法混合叠的，越密越大整片越亮，嫌亮就把 brightness 或点径往回拉。
            二进制雨布在地图外围一圈圆柱壳上（不是参考里那面单侧幕布 —— 我们是轨道相机，
            转到哪一面它都该是背景）。参考页那层 UnrealBloom 辉光没带（派单禁 three/examples/），
-           比参考暗一档是预期。七格滑杆与两颗开关都实时生效，值同脉冲一起写回 设置.json 的 ground 那一组。</p>
+           比参考暗一档是预期。七格滑杆与两颗开关都实时生效，值同脉冲一起写回 settings.json 的 ground 那一组。</p>
       </section>
       <section class="pane" id="cat-mon">
         <div class="ph"><b>采集频率</b><span class="cnt">看板与脉冲分级共用的节拍</span></div>
@@ -327,7 +327,7 @@
            两者同一个定时器，不会出现面板已更新、脚下还是旧状态。
            SSH 那一帧不走这个节拍（一次快照要跑几秒，按这个节拍去戳真机是虐待），
            仍是点"连通性测试"或双击聚焦时抓一次。
-           这一格改的是 设置.json 里 monitor.intervalMs；部署成看板后改那个文件，页面几秒后自己跟上。</p>
+           这一格改的是 settings.json 里 monitor.intervalMs；部署成看板后改那个文件，页面几秒后自己跟上。</p>
       </section>
     </div>
   </div>
@@ -529,7 +529,7 @@ function dropStation(h) {
 
 // 按 devices 重造这张地图：台数 / 次序 / 档位 / 落区全部跟着列表走，不存在第二份名单
 // 不进来的有两种：① d.hidden（这台单独藏了）② 落在"已关闭分区"里的（z.off）。
-// 两种都只是不摆出来，那一行还留在 设备清单.json 里，分区和归属也一个字没动 —— 放出来就原样回来。
+// 两种都只是不摆出来，那一行还留在 devices.json 里，分区和归属也一个字没动 —— 放出来就原样回来。
 const zoneOffOf = (d) => { const z = ZONES.find((q) => q.key === zoneKeyOf(d)); return !!(z && z.off); };
 function rebuild() {
   for (const h of holders) dropStation(h);
@@ -644,7 +644,7 @@ function paintZoneColors() {
 // ---------- 有凭据的设备走 SSH 抓一帧，没有的继续用模拟数据 ----------
 // 判据：地址 + 用户名 填了就算"可采"，密码可以是空的 —— 办公那几台 Windows 就是"账号 user、不设密码"，
 // 空口令是它们的正常配置。linux 那边口令不对的话，抓帧会如实报失败（屏上标"抓不到"），不会假装成功。
-// 这几格（含明文密码）都落进同目录 设备清单.json，见 docs/本地服务与数据源.md §七。
+// 这几格（含明文密码）都落进同目录 devices.json，见 docs/本地服务与数据源.md §七。
 // 抓法分两套（linux 一条 sh / win 一条 base64 的 PowerShell），由这一格的"系统"决定，见 serve.mjs。
 const tipEl = document.getElementById("tip");
 async function probeDevice(d) {
@@ -692,7 +692,7 @@ function tipResult(d, res) {
     showTip('<div class="th"><b>连通性测试 · ' + esc(d.short) + '</b><span class="st no">失败</span>'
       + '<span class="grow"></span><button class="mini" id="tipx" type="button">关闭</button></div>'
       + '<div class="err">' + esc(res.error) + '</div>'
-      + '<div class="fine">这台不摆模拟数：面板上只显示 — 和"还没抓到的帧"。凭据存在本目录的设备清单.json（明文），本服务不写日志、不回显。</div>');
+      + '<div class="fine">这台不摆模拟数：面板上只显示 — 和"还没抓到的帧"。凭据存在本目录的devices.json（明文），本服务不写日志、不回显。</div>');
   } else {
     const f = res.frame;
     const c = f.cpu || {}, m = f.mem || {};
@@ -850,7 +850,7 @@ function tailTexture() {
 const dotTex = softDotTexture();
 const tailTex = tailTexture();
 
-// ---------- 地面：点阵涟漪地形（2026-09-23 融合，参考 = 涟漪地面/ 那两份）----------
+// ---------- 地面：点阵涟漪地形（2026-09-23 融合，参考 = docs/参考-涟漪地面/ 那两份）----------
 // 参考是"300 单位一张地、相机离地几十单位"的口径；这里 1 单位 = 1 mm、地面要铺满 24000 mm。
 // 换算纪律跟脚下脉冲同一条：几何建在**参考单位**里（300×300，每边段数 = PULSE_SETTINGS.dotSeg），整张 mesh 乘 GROUND_S
 // 放大到毫米 —— 于是公式里的 0.5 / 0.008 / 100 / 150 / 4.0 一个都不用改，参考那张调参表 1:1 成立，
@@ -864,7 +864,7 @@ const RIPPLE_MAX = 32;        // 同时存活的环数上限（8 台全 ALERT �
 // 合法范围只写在 PULSE_LIMITS.dotSeg 一处。两颗旋钮都只在 RippleTerrain.syncDots() 一处落地。
 // 涟漪自己那层"底波"（2026-09-24 用户裁定：涟漪要自己带波动，默认开着）——
 // 整张地按两列正弦慢慢起伏，不需要谁去踢一脚。它跟涟漪共用一颗开关：关涟漪时地面彻底静止（T4 裁的"点阵原地不动"）。
-// 振幅/亮度都挂在既有滑杆上（rippleHeight 管高低、rippleBrightness 管亮暗），所以没往 设置.json 里加新键。
+// 振幅/亮度都挂在既有滑杆上（rippleHeight 管高低、rippleBrightness 管亮暗），所以没往 settings.json 里加新键。
 // k = 每参考单位的相位（0.055 → 波长 ≈ 114 单位 ≈ 9 m，比区宽还大，看着是"地在呼吸"而不是"水面波纹"）；
 // s = 每秒推进多少弧度（0.55 → 一轮约 11 秒）。
 const BREATH = { amp: 0.3, glow: 1.6, k1: 0.055, k2: 0.115, s1: 0.55, s2: 0.85 };
@@ -1589,7 +1589,7 @@ function renderList() {
       fieldRow("用户名", user),
       fieldRow("密码", pass),
       fieldRow("SSH", sshLine),
-      el("div", "netnote", "名称 / 档位 / 电源 / 系统 / 连接地址 / 用户名 → 写进同目录的 设备清单.json（跑 serve.mjs 时）。"
+      el("div", "netnote", "名称 / 档位 / 电源 / 系统 / 连接地址 / 用户名 → 写进同目录的 devices.json（跑 serve.mjs 时）。"
         + "密码按你说的明文存进这个文件（它因此是敏感文件，见 serve.mjs 顶上那句提醒）。"
         + "地址 + 用户名 填了 = 这台走 SSH 抓一帧（密码可以是空的：Windows 那几台本来就不设密码）；"
         + "地址或用户名空着 = 模拟数据。“系统”那一格不只是画屏幕用的 —— 抓帧也按它分流，"
@@ -1673,7 +1673,7 @@ function showCat(key) {
 for (const b of catBtns) b.addEventListener("click", () => showCat(b.dataset.cat));
 
 
-// 能被"外部改设置"刷新的控件都把自己那次 paint 登记进来：设置.json 被改了 → applySettings 落到内存 →
+// 能被"外部改设置"刷新的控件都把自己那次 paint 登记进来：settings.json 被改了 → applySettings 落到内存 →
 // 一声令下把这些控件重画一遍，滑杆位置与开关文案立刻跟上（否则文件里改了值，屏上滑杆还停在旧位置）。
 const uiPaints = [];
 function paintSettingsUI() { for (const f of uiPaints) f(); }
@@ -1750,14 +1750,14 @@ uiPaints.push(sliderRow(document.getElementById("rainRows"), {
 uiPaints.push(bindOnOff("rippleOn", "涟漪", () => PULSE_SETTINGS.rippleEnabled, setRippleEnabled));
 uiPaints.push(bindOnOff("rainOn", "雨", () => PULSE_SETTINGS.rainEnabled, setRainEnabled));
 
-// ---------- 设置 ↔ 本地 设置.json（2026-09-23：从"只活在浏览器里"改成"文件是真源"）----------
+// ---------- 设置 ↔ 本地 settings.json（2026-09-23：从"只活在浏览器里"改成"文件是真源"）----------
 // 三组：pulse（脉冲）/ ground（地面与雨）/ monitor（采集频率）。键名跟代码里一模一样 —— 不另起一套中文键，
 // 多一层映射就多一处会走散的地方；范围那张真表仍是页面里的 PULSE_LIMITS / MON_LIMITS，服务端只校验形状。
 // 方向是双向：启动先读文件（文件在就是权威，覆盖浏览器里的旧存档），页面里拖滑块/点开关 400 ms 后写回；
 // localStorage 只在 file:// 没服务时兜底。另外每 5 秒读一次 —— 部署成看板后，在服务器上改这个 json、
 // 墙上几秒后自己就变，不用去碰那台机器的浏览器。
 const SET_API = "/api/settings";
-const SET_FILE = "设置.json";
+const SET_FILE = "settings.json";
 const setLine = document.getElementById("setline");
 let setMode = "内存";
 let setTimer = 0;
@@ -1890,12 +1890,12 @@ async function pollSettings() {
 }
 
 // ---------- 设备清单 ↔ 本地配置文件 ----------
-// 用 node serve.mjs 起本地服务打开这页时，编辑会写回同目录的 设备清单.json；
+// 用 node serve.mjs 起本地服务打开这页时，编辑会写回同目录的 devices.json；
 // 直接 file:// 双击打开时浏览器不能写盘，退回内存态并在弹窗里标出来。
 // 清单存 name/tier/power/os/host/user/pass —— pass 明文落盘是你 2026-09-23 同意的，
 // 代价是这个文件成了敏感文件：别拷进仓库、别进分享包。
 const CFG_API = "/api/devices";
-const CFG_FILE = "设备清单.json";
+const CFG_FILE = "devices.json";
 const cfgLine = document.getElementById("cfgline");
 let cfgMode = "内存";
 let cfgLast = "";
@@ -1952,12 +1952,12 @@ async function loadDevices() {
   setCfgLine();
 }
 
-// ---------- 分区 ↔ 本地 分区.json ----------
+// ---------- 分区 ↔ 本地 zones.json ----------
 // 为什么单独一个文件：改分区名不该顺手把八台机器的连接信息重写一遍。
 // 文件里只认 key / cn / at 三样：key 是内部标识（设备的 d.zone 指的就是它），改名不动 key，
 // 所以"改分区名"永远不会把已经钉在这个区里的设备弄丢。
 const ZONE_API = "/api/zones";
-const ZONE_FILE = "分区.json";
+const ZONE_FILE = "zones.json";
 const tabsBox = document.getElementById("ztabs");
 const zRowsBox = document.getElementById("zrows");
 const zCountEl = document.getElementById("zcount");

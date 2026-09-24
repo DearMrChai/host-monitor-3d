@@ -1,4 +1,4 @@
-// 原型本地服务：把设备清单存成同目录的 设备清单.json、分区表存成 分区.json、设置存成 设置.json，
+// 原型本地服务：把设备清单存成同目录的 devices.json、分区表存成 zones.json、设置存成 settings.json，
 // 页面上的编辑实时写回这三个文件。零依赖，node 22 直接跑。
 //   node serve.mjs            → http://127.0.0.1:8123/monitor-wall.html
 //   HM_BIND=0.0.0.0 HM_ALLOW=10.226.127.14 node serve.mjs
@@ -11,9 +11,9 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
-const FILE = path.join(DIR, "设备清单.json");
-const ZFILE = path.join(DIR, "分区.json");
-const SFILE = path.join(DIR, "设置.json");
+const FILE = path.join(DIR, "devices.json");
+const ZFILE = path.join(DIR, "zones.json");
+const SFILE = path.join(DIR, "settings.json");
 const PORT = Number(process.env.PORT || 8123);
 // 默认只认环回：这块墙看得见设备清单里的明文口令，别顺手把它摊到网段上。
 // 要敞开时（比如那台机器自己没屏幕）用 HM_BIND 指定，并且**必须**同时用防火墙把来源收到信得过的
@@ -34,7 +34,7 @@ const MAX_BYTES = 64 * 1024;
 const TIERS = new Set(["laptop", "matx", "atx", "eatx", "itx", "nas", "switch", "router"]);
 // zone 留空 = 页面按档位自动落区，所以默认清单里全是空串。
 // 分区不再是固定那四个（2026-09-23）：设备上这一格只校验"长得像 key"，至于有没有这个区，
-// 由页面按 分区.json 自己判。这里写死名单的话，页面里新建的分区一落盘就被服端清成空串。
+// 由页面按 zones.json 自己判。这里写死名单的话，页面里新建的分区一落盘就被服端清成空串。
 const ZONE_KEY = /^[a-z0-9_-]{1,24}$/;
 const ZONE_MAX = 9;
 
@@ -200,7 +200,7 @@ function send(res, code, body, type = "application/json; charset=utf-8") {
 }
 
 // ---------- 连通性 / 抓一帧 ----------
-// 凭据存在 设备清单.json 里（你 2026-09-23 同意的），本文件不写死任何凭据；
+// 凭据存在 devices.json 里（你 2026-09-23 同意的），本文件不写死任何凭据；
 // 每次探测只把页面传来的这几个值用一次：不进日志、不进响应体、不回显给调用方。
 // 传输层已装好（npm i ssh2）；没装的话每条请求会明确报"未安装"，方便换机复现。
 //
@@ -407,7 +407,7 @@ try { ssh2mod = await import("ssh2"); } catch { /* 没装就是没装，下面�
 
 // 探测审计：只记时间 + 目标主机 + 成败 + 错误首行，绝不记用户名/口令。
 // 有了它，"有没有偷偷连过某台机器"是可以在磁盘上查证的，不用凭印象说。
-const LOG = path.join(DIR, "探测记录.log");
+const LOG = path.join(DIR, "probe.log");
 async function logProbe(host, ok, msg) {
   try {
     await appendFile(LOG, new Date().toISOString() + "  " + (ok ? "OK  " : "FAIL") + "  " + host + (msg ? "  " + String(msg).split("\n")[0].slice(0, 120) : "") + "\n");

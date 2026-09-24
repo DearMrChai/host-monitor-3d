@@ -29,7 +29,7 @@ const tierOf = (k) => TIERS.find((t) => t.key === k);
 let seq = 0;
 // zone 空串 = 按档位自动落区；填了就是手动指定（下拉里那格）
 const mkDev = (short, tier) => ({ id: ++seq, short, tier, zone: "", power: true, hidden: false, os: "win", host: "", user: "", pass: "" });
-// 连不上 /api/devices 时（清单为空、服务没起、读回坏 JSON）用的内置默认，和 serve.mjs 首次生成的 设备清单.json 一致
+// 连不上 /api/devices 时（清单为空、服务没起、读回坏 JSON）用的内置默认，和 serve.mjs 首次生成的 devices.json 一致
 let devices = [
   mkDev("笔记本", "laptop"), mkDev("ITX", "itx"), mkDev("mATX", "matx"),
   mkDev("ATX", "atx"), mkDev("E-ATX", "eatx"),
@@ -48,7 +48,7 @@ const SPACING = 2140;
 // 区不新增档位，也不改几何：档位决定"用哪套模型"，区只决定"摆在地图哪一块"。
 // 默认按档位落区（ZONE_OF_TIER），设备行里那一格下拉可以逐台改写（d.zone 非空 = 手动指定）。
 // 分区不再是写死的四个（2026-09-23）：名字和 X/Z 在设置里的"分区设置"改，增删也在那儿，
-// 改动存进同目录的 分区.json。数组本身是长驻的同一个对象（ZONES.length = 0 再 push），
+// 改动存进同目录的 zones.json。数组本身是长驻的同一个对象（ZONES.length = 0 再 push），
 // 别把它换成新数组 —— 下面一堆闭包和读点都抓着它。
 // 四个区**同一个尺寸**：角铁要八对称，盒子必须全等，否则"分了区"会读成"四堆随机摆放"。
 // 这个数不是凑整数好看，是按最挤的一堆现量的：算力集群 4 台 = 3 列 × 1400 + 最宽的 E-ATX 桌面 999
@@ -61,7 +61,7 @@ const ZC = [(ZONE_FIELD.w + ZONE_AISLE) / 2, (ZONE_FIELD.d + ZONE_AISLE) / 2];
 // 默认摆位（2026-09-23 第二次重排：以网络设备区为地图中心）：网络落在原点 (0,0)，
 // 其余三区整体后移一个 ZC[1]（= 半个 Z 间距）—— 相对方位与上一版完全一样，只是把整张图
 // 平移到"网络区在正中"。于是算力/储存在后排（z = −ZONE_PITCH）左右分开，终端在前排正前方。
-// 全是"默认值"不是"定案值"——分区设置里改一个数就能挪，改完存 分区.json。
+// 全是"默认值"不是"定案值"——分区设置里改一个数就能挪，改完存 zones.json。
 const ZONES = [
   { key: "compute", cn: "算力集群",   at: [-ZC[0], -ZONE_PITCH] },
   { key: "storage", cn: "储存设备区", at: [ ZC[0], -ZONE_PITCH] },
@@ -96,7 +96,7 @@ const MONITOR_SETTINGS = { intervalMs: 3000 };
 const MON_LIMITS = { intervalMs: [200, 5000, 100] };
 const MS_KEY = "hm.mon.v1";
 
-// 脚下脉冲 + 地面点阵 + 二进制雨的全部可调值：真源只有这一份，滑杆、设置.json、
+// 脚下脉冲 + 地面点阵 + 二进制雨的全部可调值：真源只有这一份，滑杆、settings.json、
 // applySettings 读写的都是它（启动时从 localStorage 恢复那一段仍留在页面里，顺序不变）。
 const PULSE_SETTINGS = {
   enabled: false,              // 总开关：关掉 = 立刻停发 + 把还在飞的清干净（不是"停发不停飞"那种慢收尾）
@@ -111,7 +111,7 @@ const PULSE_SETTINGS = {
   upParticleBrightness: 0.22,  // 向上粒子整体亮度，独立于脉冲，免得两个通道互相盖
   travelK: 18,                 // 扩散范围 = 机器本体 footprint 半径 × 这个系数
                                // 2026-09-24 用户裁定"直径至少是现在的 3 倍"：6 → 18（mATX 那一档半径 ≈ 3 m）。
-  // ---- 地面涟漪 + 二进制雨（2026-09-23 融合，参考在 涟漪地面/ 与 docs/参考-数字雨/）----
+  // ---- 地面涟漪 + 二进制雨（2026-09-23 融合，参考在 docs/参考-涟漪地面/ 与 docs/参考-数字雨/）----
   // 两颗开关互相独立、也独立于上面的 enabled：脉冲关了脚下安静，地面和雨照旧。
   rippleEnabled: true,
   rippleHeight: 0.5,           // 涟漪高度（参考单位）：0 = 只亮不起伏
