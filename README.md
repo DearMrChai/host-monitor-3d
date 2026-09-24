@@ -70,6 +70,7 @@ desk-geometry.mjs      外设与桌面组合（复用上面那份，没有第二
 src/three.mjs          全场景唯一的 THREE 来源（双 CDN 兜底在这里，两页与两份几何都 import 它）
 src/model.mjs          状态层：档位表 / 设备清单 / 分区 / 三档分级 / 可调参数表，整页只有一份（T5-2 从页面里搬出来的）
 src/format.mjs         读数换算层：数 → 屏上那行字（fmt / 色阶 / GB / 型号短名 / 厂商…），零依赖，三处共用（T5-4 刀1）
+src/ui.mjs             DOM 积木层：造节点 / 造一行滑杆 / 造一个开关按钮，只认参数不认状态（T5-4 刀2）
 monitor-wall.html      监控墙原型（几何、three、状态都是真 import，所以必须经 serve.mjs 打开）
 silhouette-shelf.html  剪影架原型（嵌内联副本，可 file:// 双击）
 serve.mjs              本地服务：清单 / 分区 / 设置 三个文件的读写 + SSH 探一帧（Windows 走 PowerShell，Linux 走 sh）

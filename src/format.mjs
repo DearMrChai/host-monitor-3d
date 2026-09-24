@@ -64,6 +64,10 @@ const vendorOf = (n) => {
   return String(n).split(/\s+/)[0];
 };
 
+// 百分比 / 倍数两种写法：滑杆右上角那一格用，全页只这一份。
+const pctFmt = (v) => Math.round(v * 100) + "%";
+const mmFmt = (v) => "×" + v.toFixed(1);
+
 export { fmt, esc, clampv, usageColor, tempColor, mean, fmtSpeed,
   hhmm, gbOfBytes, mbOfBytes, gbOfMb, avgOf, gbTxt, memPct, memFreeGb, diskName, volName,
-  shortName, vendorOf };
+  shortName, vendorOf, pctFmt, mmFmt };
