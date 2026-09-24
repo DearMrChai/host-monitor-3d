@@ -349,21 +349,19 @@
 <div id="status"></div>
 <canvas id="c"></canvas>
 
-<script type="module">
-let THREE;
-try {
-  THREE = await import("three");
-} catch (errUnpkg) {
-  try {
-    THREE = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js");
-  } catch (errJsdelivr) {
-    const s = document.getElementById("status");
-    s.style.display = "grid";
-    s.textContent = "three@0.170.0 两个 CDN 都没取到（大概是没网/代理没开）："
-      + errUnpkg.message + " || " + errJsdelivr.message;
-    throw errUnpkg;
-  }
+<script>
+// 代码拆成多个 .mjs 之后 file:// 双击就打不开了（浏览器不许 import 本地模块）。
+// 这一句必须是经典内联脚本：模块那条路在此时压根没跑起来，写在模块里等于没说。
+if (location.protocol === "file:") {
+  var s = document.getElementById("status");
+  s.style.display = "grid";
+  s.innerHTML = "这一页的代码拆成了多个 .mjs，<code>file://</code> 双击打不开（浏览器不许 import 本地模块）。<br>"
+    + "请在仓库目录跑 <code>node serve.mjs</code>，再开 <code>http://127.0.0.1:8123/monitor-wall.html</code>";
 }
+</script>
+
+<script type="module">
+import { THREE } from "./src/three.mjs";
 
 const G2 = (() => {
 // 设备几何 · 机箱与网络设备（剪影架那页用）· 可移植层
