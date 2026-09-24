@@ -159,6 +159,9 @@ const stateOf = (load) => STATES.find((s) => load <= s.max) || STATES[STATES.len
 
 // 配置文件里的每一行 → 场景里的设备对象：档位不认识退到 mATX，分区名不在表里就按档位自动落区。
 // 原来这段写在 loadDevices 里，整份换绑走不了导入方，所以搬进来。
+// 这台填没填地址 = 取不取真数。fleet 摆它、看板读它、探针问它，三处同一个口径，所以放状态这层。
+export const liveOf = (d) => !!(d.host && d.user);
+
 export function setDevices(list) {
   devices = (list || []).map((it) => Object.assign(
     mkDev(String(it.name || "(未命名)"), TIERS.some((t) => t.key === it.tier) ? it.tier : "matx"),
