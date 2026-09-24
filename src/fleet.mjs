@@ -266,7 +266,11 @@ export function paintLabel(h, d) {
   const on = d.power;
   const st = levelOf(d);
   const pct = on ? Math.round((loads.get(d.id) || {}).pct || 0) : 0;
-  h.stateLine.textContent = on ? (st ? "● " + st.cn + " " + pct + "%" : "●") : "○ 关机";
+  // 没有档位 = 这台一个负载数都还没取到（填了地址但还没抓到帧）。宁可写"待抓"，
+  // 也不留一个光秃秃的 ●：那看着像"有状态但很闲"，其实就是没数据。
+  h.stateLine.textContent = on
+    ? (st ? "● " + st.cn + " " + pct + "%" : "● " + (d.probeErr ? "抓不到" : "待抓"))
+    : "○ 关机";
   h.stateLine.className = on ? (st ? "lv-" + st.key : "on") : "";
 }
 

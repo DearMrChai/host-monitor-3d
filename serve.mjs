@@ -289,6 +289,8 @@ const listOf = (R, k) => {
   return a.length ? a : null;
 };
 const pairOf = (R, k) => { const a = listOf(R, k); return a && a.length >= 2 ? [a[0], a[1]] : null; };
+// "只有和参照数组一样长才要"的那道闸（下面 coreMap / pcls 都按 perCore 的下标对齐，见那里）
+const aligned = (a, ref) => (a && ref && a.length === ref.length ? a : null);
 const clampPct = (v) => (v == null ? null : Math.min(100, Math.max(0, Math.round(v))));
 const rowsOf = (R, k, n) => (R[k] || []).map((r) => r.split("|").map((x) => x.trim())).filter((f) => f.length >= n);
 // nvidia-smi 的 [N/A] / [Not Supported] 一律变 null —— 编一个 0 出来最误导人
@@ -351,7 +353,11 @@ function buildFrame(out) {
       curMhz: numOf(oneOf(R, "CPUCURMHZ")),        // 只有 linux 有；Windows 取不到实时频率
       tempC: numOf(oneOf(R, "CPUTEMP")),           // 只有 linux 有；Windows 取不到 CPU 温度
       perCore, perMhz: listOf(R, "PCFREQ"),        // perMhz 只有 linux 有
-      pcls: oneOf(R, "PCLS") ? oneOf(R, "PCLS").split(",").map((x) => x.trim()) : null,   // 只有 win 有
+      // 每逻辑处理器 → 哪个物理核 / 是 P 还是 E（核数、卡片怎么摆全靠这两条）。
+      // 两条都**必须和 perCore 一样长**才认：长度不等说明两路采的不是同一批逻辑处理器，
+      // 按下标对齐就成了瞎猜 —— 宁可整段 null，让看板退回"没有核映射"那条路。
+      coreMap: aligned(listOf(R, "PCORE"), perCore),
+      pcls: aligned(oneOf(R, "PCLS") ? oneOf(R, "PCLS").split(",").map((x) => x.trim()) : null, perCore),
     },
     mem: {
       type: oneOf(R, "MEMTYPE") || null, speedMhz: numOf(oneOf(R, "MEMSPD")),

@@ -6,7 +6,7 @@
 // 反过来谁都不认页面 —— scene / clock / 写文件那三样由 initGround 递进来（同 fleet 那一刀）。
 import { THREE } from "./three.mjs";
 import { devices, holders, loads, PULSE_SETTINGS, PULSE_LIMITS, PS_KEY,
-  stateOf, levelOf, zoneOffOf } from "./model.mjs";
+  stateOf, levelOf, zoneOffOf, liveOf } from "./model.mjs";
 import { clampv } from "./format.mjs";
 import { framePct } from "./dashboard.mjs";
 import { holderOf, paintLabel } from "./fleet.mjs";
@@ -481,15 +481,21 @@ export function stepLoads(t) {
   for (const d of devices) {
     if (d.hidden || zoneOffOf(d)) continue;   // 屏幕上没有它 → 不用替它算分级
     let w = loads.get(d.id);
-    if (!w) { w = { pct: 10 + Math.random() * 45, k: Math.random() * 6.283, key: null }; loads.set(d.id, w); }
+    if (!w) {
+      w = { pct: liveOf(d) ? null : 10 + Math.random() * 45, k: Math.random() * 6.283, key: null };
+      loads.set(d.id, w);
+    }
     const real = realLoadOf(d);
     if (real != null) w.pct = real;
+    else if (liveOf(d)) w.pct = null;   // 填了地址却还没抓到帧 = 没有数。没有数就不编档位：
+                                        // 档位一编出来，脚下的环、涟漪、区的角铁颜色全跟着假数走
+                                        //（2026-09-24 他问"初始跳动的依据是否真实"就是这条）
     else {
       const wave = (Math.sin(t * 0.35 + w.k) + 1) / 2;   // 每台的相位不同，不然五台同色同拍
       const target = clampv(8 + wave * 76 + (Math.random() < 0.06 ? 32 : 0) + (Math.random() - 0.5) * 12, 0, 100);
       w.pct += (target - w.pct) * 0.28;
     }
-    const key = d.power ? stateOf(w.pct).key : null;
+    const key = d.power && w.pct != null ? stateOf(w.pct).key : null;
     if (key !== w.key) {
       w.key = key;
       const h = holderOf(d);

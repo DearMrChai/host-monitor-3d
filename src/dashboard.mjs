@@ -3,7 +3,7 @@
 // 这层不碰 SSH、不碰浮层、不碰分区摆放 —— 那些留在页面，是"这一页"的接线不是"这块板"的逻辑。
 import { el, sparkSvg, mini } from "./ui.mjs";
 import { clampv, usageColor, tempColor, mean, fmtSpeed, hhmm, gbOfBytes, mbOfBytes, gbOfMb, avgOf, gbTxt, memPct, memFreeGb, diskName, volName, shortName, vendorOf } from "./format.mjs";
-import { liveOf, tierOf, MONITOR_SETTINGS, MS_KEY } from "./model.mjs";
+import { liveOf, tierOf, MONITOR_SETTINGS, MON_LIMITS, MS_KEY } from "./model.mjs";
 
 const srcTag = (d) => (!liveOf(d) ? "模拟" : d.frame ? "实测" : d.probeErr ? "抓不到" : "待抓");
 
@@ -38,8 +38,10 @@ function hwOf(d) {
   if (!f) return liveOf(d) ? { cores: 0, gpus: 0, disks: 0, nics: 0, mem: 0, live: true } : base;
   const cpu = f.cpu || {};
   return {
-    // 逻辑处理器数 = 每核占用率那个数组的长度；探针没给就退回它报的核数
-    cores: (cpu.perCore && cpu.perCore.length) || f.cores || 0,
+    // 这一格喂的是"几个核"（RES.cpu.count 那张表），所以报**物理核**：探针给了核映射就数不同的核，
+    // 没给就退回逻辑处理器个数（至少比 0 强），再退回探针报的 CORES。
+    cores: (cpu.coreMap && new Set(cpu.coreMap).size)
+      || (cpu.perCore && cpu.perCore.length) || f.cores || 0,
     gpus: (f.gpus || []).length + (f.gpuNames || []).length,
     disks: (f.disks || []).length || (f.physDisks || []).length,
     nics: nicsOf(f).length,
@@ -93,15 +95,37 @@ const NIC_NAMES = [
 //   · items 为空 → 这一节整节不建（buildPanel 里就跳过了）
 //   · stats 里 v 为 null 的 → 那一格显示 —（格数固定，不能一帧一个样）
 // 模拟项永远返回数/串，所以这条规则对它们是无操作 —— 没填地址的那条路一个字都没改。
-// CPU：一张卡 = 一个逻辑处理器。kind（P/E）只有 Windows 混合架构那台报得出来，没有就是 null
-// （标签位留空，不去猜）；温度/线程数/历史这三样一次快照给不了，一律 null。
-const liveCpu = (f) => ((f.cpu && f.cpu.perCore) || []).map((u, i) => ({
-  id: i, live: true,
-  kind: f.cpu.pcls && f.cpu.pcls[i] ? f.cpu.pcls[i] : null,
-  usage: u,
-  freq: f.cpu.perMhz && f.cpu.perMhz[i] != null ? f.cpu.perMhz[i] / 1000 : null,
-  temp: null, threads: [], history: [],
-}));
+// CPU：一张卡 = 一个**物理核**。探针报了核映射（coreMap，逐逻辑处理器）就把同核的逻辑处理器并成一张：
+// 数取该核里最忙的那个逻辑处理器（一个核忙到 100% 就是 100%，取平均会把"有一根线程跑满"洗掉），
+// 两根线程各自的数挂在卡片的详情里（threads），点开卡才看得见。
+// 没有映射（老探针、或两路长度不等被 serve.mjs 判废）就退回一逻辑处理器一张 —— 退回时**明说**是逻辑的，
+// 不再把"线程 0/1/2…"当成核来摆（他 2026-09-24 那条"点开之后还是显示线程，不是核心"）。
+// 温度一次快照给不了，一律 null。
+const liveCpu = (f) => {
+  const c = f.cpu || {};
+  const us = c.perCore || [];
+  const len = (a) => (a && a.length === us.length ? a : null);
+  const map = len(c.coreMap), cls = len(c.pcls), mhz = len(c.perMhz);
+  if (!map) {
+    return us.map((u, i) => ({ id: i, live: true, core: false, kind: cls ? (cls[i] || null) : null,
+      usage: u,
+      freq: mhz && mhz[i] != null ? mhz[i] / 1000 : null, temp: null, threads: [], history: [] }));
+  }
+  const groups = new Map();
+  us.forEach((u, i) => {
+    let g = groups.get(map[i]);
+    if (!g) {
+      g = { id: groups.size, coreId: map[i], live: true, core: true, kind: null, usage: null,
+        freq: null, threads: [], history: [] };
+      groups.set(map[i], g);
+    }
+    if (cls) g.kind = g.kind === "P" || cls[i] === "P" ? "P" : "E";
+    if (mhz && mhz[i] != null && g.freq == null) g.freq = mhz[i] / 1000;
+    g.usage = g.usage == null ? u : Math.max(g.usage, u);
+    g.threads.push({ id: i, usage: u });
+  });
+  return [...groups.values()];
+};
 const liveMem = (f) => {
   if (!f.memTotalMb) return [];
   const m = f.mem || {};
@@ -185,16 +209,19 @@ const RES = {
       const ghz = (v) => (v >= 1000 ? (v / 1000).toFixed(2) + " GHz" : v + " MHz");
       const hz = c.curMhz ? " · 实时 " + ghz(c.curMhz) : c.maxMhz ? " · 主频 " + ghz(c.maxMhz) : "";
       const model = shortName(c.model);
+      // 线程总数按卡里那些逻辑处理器数出来（有核映射时 = 各卡 threads 之和；没有映射时卡片本身就是逻辑处理器）
+      const logi = c.logical || its.reduce((a, x) => a + ((x.threads && x.threads.length) || 1), 0);
+      // 抬头数的就是**屏上那些卡**，所以拿 its 自己算，不去念探针另报的那两个数（对不上就是打脸）
       const p = its.filter((x) => x.kind === "P").length;
       const e = its.filter((x) => x.kind === "E").length;
-      if (p + e > 0) {
-        const phys = c.phys || p + e;
-        return p + "P + " + e + "E · " + phys + " 核" + hz + (model ? " · " + model : "");
+      const pe = p + e ? p + "P + " + e + "E · " : "";
+      if (its[0] && its[0].core) {
+        // 一核一张卡：核数 = 卡数，线程数另外报出来，免得"14"被读成 14 个线程
+        return pe + its.length + " 核 · " + logi + " 线程" + hz + (model ? " · " + model : "");
       }
-      // 实测的卡是**一个逻辑处理器一张**，所以抬头必须说线程，不能写成 "12 核" 让他以为是 12 个物理核
-      const phys = c.phys || 0;
-      const logi = c.logical || its.length;
-      return (phys ? phys + " 核 · " : "") + logi + " 线程" + hz + (model ? " · " + model : "");
+      // 没有核映射（老探针 / 两路长度不等）：卡是一逻辑处理器一张，抬头只能说线程，
+      // 并明说映射没取到 —— 他 09-24 报的"还是显示线程不是核心"，退回这一路时必须让他看见原因
+      return logi + " 线程 · 核映射未取到" + hz + (model ? " · " + model : "");
     },
     make: (i, hw) => {
       const isP = i < pCountOf(hw.cores);
@@ -205,7 +232,7 @@ const RES = {
         history: hist(60, base, 10),
       };
     },
-    label: (c) => (c.live ? "线程 " + c.id : "Core " + c.id),
+    label: (c) => (c.core ? "核 " + c.id : c.live ? "逻辑处理器 " + c.id : "Core " + c.id),
     tag: (c) => c.kind || "",
     tagCls: (c) => (c.kind === "P" ? "p" : c.kind === "E" ? "e" : ""),
     pct: (c) => c.usage,
@@ -228,11 +255,15 @@ const RES = {
       const t = ts.length ? Math.max(...ts) : pkg;
       const avg = avgOf(us);
       const hotId = us.length ? us.indexOf(Math.max(...us)) : -1;
+      // 第四格念的是"哪一张卡最忙"，所以称呼必须跟着卡的口径走（核 / 逻辑处理器），不能写死
+      const c0 = its[0] || {};
+      const byCore = !c0.live || c0.core;
+      const busyPre = byCore ? (c0.live ? "核 " : "Core ") : "逻辑处理器 ";
       return [
         { k: "总使用率", v: avg == null ? null : avg.toFixed(1), u: "%", color: avg == null ? null : usageColor(avg) },
         { k: "平均频率", v: fs.length ? mean(fs).toFixed(2) : null, u: "GHz" },
         { k: "最高温度", v: t == null ? null : t.toFixed(0), u: "°C", color: t == null ? null : tempColor(t) },
-        { k: its[0] && its[0].live ? "最忙线程" : "最忙核心", v: hotId >= 0 ? (its[0] && its[0].live ? "线程 " : "Core ") + its[hotId].id + " · " + us[hotId].toFixed(0) + "%" : null, sm: true },
+        { k: byCore ? "最忙核心" : "最忙逻辑处理器", v: hotId >= 0 ? busyPre + its[hotId].id + " · " + us[hotId].toFixed(0) + "%" : null, sm: true },
       ];
     },
     // 抓到的那一帧只覆盖总使用率（win 用占用率、linux 用负载均值÷核数）；各核分布仍是分摊出来的
@@ -810,7 +841,8 @@ function buildPanel(d) {
     perfBody.append(el("div", "pnote", !liveOf(d)
       ? "这台没填地址：只摆位置，不抓数"
       : d.probeErr ? "这台抓不到：" + d.probeErr
-        : "还没抓到这台的帧（小窗里把采集频率调成秒数就开始抓）"));
+        : "还没抓到这台的帧：双击这一下已经当场去抓了，那一帧还没回来。"
+          + "之后每 " + Math.round(MONITOR_SETTINGS.probeEveryMs / 1000) + " 秒自动抓一轮（设置 → 采集频率）"));
   }
 }
 
@@ -873,9 +905,16 @@ perfGrip.addEventListener("pointerdown", (e) => {
 // 一个定时器同时驱动两处：右侧看板的数值游走、每台设备"负载 → 脉冲分级"的判定。
 // 放同一个定时器是刻意的 —— 否则会出现面板已经换新、脚下脉冲还挂在旧状态上。
 // 真值在 src/model.mjs 的 MONITOR_SETTINGS，这里只负责"启动时从 localStorage 恢复"和"改完通知写盘"。
+// 两格一起恢复（probeEveryMs 那格管"多久抓一帧"，定时器长在页面）。
 try {
   const saved = JSON.parse(localStorage.getItem(MS_KEY) || "{}");
-  if (Number.isFinite(saved.intervalMs)) MONITOR_SETTINGS.intervalMs = saved.intervalMs;
+  for (const k of ["intervalMs", "probeEveryMs"]) {
+    if (!Number.isFinite(saved[k])) continue;
+    const lim = MON_LIMITS[k];
+    MONITOR_SETTINGS[k] = clampv(Math.round(saved[k] / lim[2]) * lim[2], lim[0], lim[1]);
+  }
 } catch (e) { /* 读不到就用默认值 */ }
 
-export { framePct, nicsOf, perfEl, perfName, perfSub, perfBody, perfGrip, perfPause, perfDev, paintPanel, showPerf, hidePerf, refreshPerfHead, W_MIN, W_MAX, clampWidth, savedW };
+// liveCpu 也一并 export：原型自检钩子 __hm().cpuCardsOf(一份合成帧) 要用它核对
+// "混合架构那台到底并成了几张卡"，不必守着一台真混合架构机器在线才验得了（正常运行没人调它）。
+export { framePct, nicsOf, liveCpu, perfEl, perfName, perfSub, perfBody, perfGrip, perfPause, perfDev, paintPanel, showPerf, hidePerf, refreshPerfHead, W_MIN, W_MAX, clampWidth, savedW };

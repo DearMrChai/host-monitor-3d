@@ -16,16 +16,15 @@ import { perfDev, hidePerf, refreshPerfHead } from "./dashboard.mjs";
 import { rebuild, applyState, holderOf } from "./fleet.mjs";
 import { setPulseSetting, setPulseEnabled, setRippleEnabled, setRainEnabled } from "./ground.mjs";
 
-// 页面递进来的三样动作：探针（抓一帧 + 把结果写在浮层里）、心跳（换了采集频率要重排定时器）、
+// 页面递进来的三样动作：探针（抓一帧 + 把结果写在浮层里）、节拍 setter（改了任何一格节拍都要重排它的定时器）、
 // 相机（点设备行那个"位置"链接要聚焦、开弹窗要先收掉钉住的牌）。声明成 let 是因为它们只在点击时被调，
 // 不在模块求值期跑 —— 装配那一行（initSettings）晚于这里就行。
-let probeDevice = null, tipResult = null, setMonitorSetting = null, startBeat = null;
+let probeDevice = null, tipResult = null, setMonitorSetting = null;
 let focusStation = null, pinLabel = null, moveTo = null;
 export function initSettings(ctx) {
   probeDevice = ctx.probeDevice;
   tipResult = ctx.tipResult;
   setMonitorSetting = ctx.setMonitorSetting;
-  startBeat = ctx.startBeat;
   focusStation = ctx.focusStation;
   pinLabel = ctx.pinLabel;
   moveTo = ctx.moveTo;
@@ -280,12 +279,21 @@ for (const o of [
   }));
 }
 uiPaints.push(sliderRow(document.getElementById("monRows"), {
-  title: "采集间隔", hint: "多少毫秒走一轮。200ms 最激进，5000ms 最省。",
+  title: "重画节拍", hint: "多少毫秒走一拍：重画右侧看板、重算每台的档位（脚下什么色）。纯本地，不碰网络。",
   limits: MON_LIMITS.intervalMs,
   // 只报"每 xx ms 1 次"：原来那格还算了个 1000/v，出来的"1.2 次/秒 / 1.3 次/秒"是小数，读着像故障
   fmt: (v) => "每 " + v.toFixed(0) + " ms 1 次",
   get: () => MONITOR_SETTINGS.intervalMs,
   set: (v) => setMonitorSetting("intervalMs", v),
+}));
+// 抓帧间隔 = 那几台真机"多久被敲一次"。这一格才是"看板上的数会不会自己动"的开关：
+// 重画节拍再快，帧不更新也只是把同一份数重念一遍（他 2026-09-24 报的"数值纹丝不动"就是这个）。
+uiPaints.push(sliderRow(document.getElementById("monRows"), {
+  title: "抓帧间隔", hint: "隔多久把填了地址的机器各抓一帧（从上一轮抓完开始计时）。一轮实测 20~35 s，别调到 3 s 那档连轴转。",
+  limits: MON_LIMITS.probeEveryMs,
+  fmt: (v) => "每 " + (v / 1000).toFixed(0) + " 秒 1 轮",
+  get: () => MONITOR_SETTINGS.probeEveryMs,
+  set: (v) => setMonitorSetting("probeEveryMs", v),
 }));
 
 // 脉冲总开关那一颗按钮：文案与配色跟状态同源，不另存一份
@@ -368,7 +376,7 @@ function settingsToFile() {
       rainEnabled: PULSE_SETTINGS.rainEnabled,
       rainBrightness: PULSE_SETTINGS.rainBrightness,
     },
-    monitor: { intervalMs: MONITOR_SETTINGS.intervalMs },
+    monitor: { intervalMs: MONITOR_SETTINGS.intervalMs, probeEveryMs: MONITOR_SETTINGS.probeEveryMs },
   };
 }
 function setSetLine() {
@@ -404,11 +412,13 @@ function applySettings(o) {
   }
   const m = o.monitor;
   if (m && typeof m === "object") {
-    const v = Number(m.intervalMs);
-    if (Number.isFinite(v)) {
-      const lim = MON_LIMITS.intervalMs;
+    // 两格节拍都走页面递进来的那个 setter：夹取、重排定时器（本地那一拍 / 抓帧那一轮）、
+    // 写 localStorage 兜底，全在 setter 里，这里只判断"值是不是真的变了"（变了才要重绘画布）。
+    for (const k of ["intervalMs", "probeEveryMs"]) {
+      const lim = MON_LIMITS[k], v = Number(m[k]);
+      if (!Number.isFinite(v) || !lim) continue;
       const nv = clampv(Math.round(v / lim[2]) * lim[2], lim[0], lim[1]);
-      if (nv !== MONITOR_SETTINGS.intervalMs) { MONITOR_SETTINGS.intervalMs = nv; startBeat(); changed = true; }
+      if (nv !== MONITOR_SETTINGS[k]) { setMonitorSetting(k, v, true); changed = true; }
     }
   }
   if (changed) {

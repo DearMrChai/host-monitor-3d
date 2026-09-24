@@ -1,4 +1,4 @@
-// 一条命令的自检：语法（含 HTML 里那段模块体）→ 几何注入 → 几何对账。
+// 一条命令的自检：语法（含 HTML 里那段模块体）→ 几何注入 → 几何对账 → CPU 并卡口径。
 // 为什么不引 linter：这一仓库的纪律是零构建，`node --check` 就是唯一门槛（见 README「怎么跑」）。
 // HTML 那段必须单独提出来量：它占整页 3200 多行，而 node 不认 .html。
 import { readFileSync, writeFileSync, unlinkSync, readdirSync } from 'node:fs';
@@ -36,7 +36,7 @@ for (const f of modFiles) {
   check(f, readFileSync(f, 'utf8'), '_check_one.mjs');
 }
 
-for (const step of ['inject-geometry.mjs', 'verify-geometry.mjs']) {
+for (const step of ['inject-geometry.mjs', 'verify-geometry.mjs', 'verify-cpu.mjs']) {
   const r = spawnSync(process.execPath, [step], { encoding: 'utf8' });
   process.stdout.write(r.stdout || '');
   if (r.status !== 0) {

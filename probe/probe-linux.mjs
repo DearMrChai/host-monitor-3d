@@ -22,6 +22,15 @@ PHYS=$(lscpu -p=CORE,SOCKET 2>/dev/null | grep -v '^#' | sort -u | wc -l | tr -d
 case "$PHYS" in ''|*[!0-9]*) PHYS=0;; esac
 [ "$PHYS" -gt 0 ] 2>/dev/null || PHYS=$(awk -F: '/^cpu cores/{sub(/ /,"",$2);print $2;exit}' /proc/cpuinfo)
 echo "CORES=$PHYS"
+# 每个逻辑处理器属于哪个物理核（下标 = 逻辑处理器号，与 /proc/stat 的 cpuN、PCU 那一路同一套编号）：
+# lscpu -p=CORE,SOCKET 一行一个逻辑处理器、按逻辑序出，双路机上 CORE 会跨路重复，所以按 (SOCKET,CORE) 去重再编号。
+# 编号是"第几个不同的核"而不是内核那个核号 —— 看板只要"哪几个逻辑处理器是同一个核"，不要核号本身。
+# 取不到（没有 lscpu）就不报这个键：看板退回"一逻辑处理器一张卡"，不去猜谁跟谁同核。
+# 这一路没有 P/E 之分（PCLS 只有 Windows 的混合架构报），linux 侧就不报 PCLS。
+PCORE=$(lscpu -p=CORE,SOCKET 2>/dev/null | grep -v '^#' | awk -F, '
+  { k=$2 "," $1; if(!(k in n)){ n[k]=c++ } o=o (o?",":"") n[k] }
+  END{ if(NR) print o }')
+[ -n "$PCORE" ] && echo "PCORE=$PCORE"
 echo "CPUMAXMHZ=$(lscpu 2>/dev/null | awk -F: '/CPU max MHz/{gsub(/ /,"",$2);printf "%.0f",$2+0}')"
 echo "CPUCURMHZ=$(awk -F: '/^cpu MHz/{s+=$2;n++} END{if(n)printf "%.0f",s/n}' /proc/cpuinfo)"
 echo "LOAD=$(cut -d' ' -f1 /proc/loadavg)"

@@ -321,13 +321,14 @@
            比参考暗一档是预期。七格滑杆与两颗开关都实时生效，值同脉冲一起写回 settings.json 的 ground 那一组。</p>
       </section>
       <section class="pane" id="cat-mon">
-        <div class="ph"><b>采集频率</b><span class="cnt">看板与脉冲分级共用的节拍</span></div>
+        <div class="ph"><b>采集频率</b><span class="cnt">重画那一拍 / 抓帧那一轮，两格各管各的</span></div>
         <div id="monRows"></div>
-        <p class="fine">这个节拍驱动两处：右侧看板的数值推进，和每台设备"负载 → 脉冲分级"的判定，
+        <p class="fine"><b>重画节拍</b>驱动两处本地动作：右侧看板的数值推进，和每台设备"负载 → 脉冲分级"的判定，
            两者同一个定时器，不会出现面板已更新、脚下还是旧状态。
-           SSH 那一帧不走这个节拍（一次快照要跑几秒，按这个节拍去戳真机是虐待），
-           仍是点"连通性测试"或双击聚焦时抓一次。
-           这一格改的是 settings.json 里 monitor.intervalMs；部署成看板后改那个文件，页面几秒后自己跟上。</p>
+           <b>抓帧间隔</b>是另一件事：隔多久把"填了地址"的机器各抓一帧（从上一轮抓完开始计时）。
+           两格各管各的 —— 这一格才决定看板上的数会不会自己动；重画节拍调得再小，也只是把已经抓回来的那一帧念得更勤。
+           一轮抓帧实测 20~35 s（四台真机各 1.8~13 s，含每台之间那 1.2 s），所以调低于这个数没有意义、调到 3 s 那档就是连轴转。
+           两格都写进 settings.json 的 monitor 那一组；部署成看板后改那个文件，页面几秒后自己跟上。</p>
       </section>
     </div>
   </div>
@@ -362,7 +363,7 @@ if (location.protocol === "file:") {
 
 <script type="module">
 import { THREE } from "./src/three.mjs";
-import { framePct, nicsOf, perfEl, perfName, perfSub, perfBody, perfGrip, perfPause, perfDev, paintPanel, showPerf, hidePerf, refreshPerfHead, W_MIN, W_MAX, clampWidth, savedW } from "./src/dashboard.mjs";
+import { framePct, nicsOf, liveCpu, perfEl, perfName, perfSub, perfBody, perfGrip, perfPause, perfDev, paintPanel, showPerf, hidePerf, refreshPerfHead, W_MIN, W_MAX, clampWidth, savedW } from "./src/dashboard.mjs";
 import { el, mini } from "./src/ui.mjs";
 // pctFmt / mmFmt 归读数层了：它们只是"数→字"，不是造节点。
 import { fmt, esc, clampv, pctFmt, mmFmt } from "./src/format.mjs";
@@ -417,9 +418,9 @@ scene.add(fillLight);
 const clock = new THREE.Clock();
 initFleet({ scene, fitOverview, touch });
 initGround({ scene, clock, touchSettings });   // 地面：两张 mesh 从这里才开始建，所以必须早于第一帧 tick
-// 设置层要用的页面动作在这里交出去：探针那两个、心跳、相机那三个。这七个都是函数声明（提升），
+// 设置层要用的页面动作在这里交出去：探针那两个、节拍 setter、相机那三个。这几个都是函数声明（提升），
 // 所以这一行写在文件靠前也没事 —— 真正被调是在点击和启动之后。
-initSettings({ probeDevice, tipResult, setMonitorSetting, startBeat, focusStation, pinLabel, moveTo });
+initSettings({ probeDevice, tipResult, setMonitorSetting, focusStation, pinLabel, moveTo });
 
 // ---------- 有凭据的设备走 SSH 抓一帧，没有的继续用模拟数据 ----------
 // 判据：地址 + 用户名 填了就算"可采"，密码可以是空的 —— 办公那几台 Windows 就是"账号 user、不设密码"，
@@ -427,37 +428,74 @@ initSettings({ probeDevice, tipResult, setMonitorSetting, startBeat, focusStatio
 // 这几格（含明文密码）都落进同目录 devices.json，见 docs/本地服务与数据源.md §七。
 // 抓法分两套（linux 一条 sh / win 一条 base64 的 PowerShell），由这一格的"系统"决定，见 serve.mjs。
 const tipEl = document.getElementById("tip");
-async function probeDevice(d) {
+// 同一台正在抓的时候不并第二次：轮询那一轮、双击补抓、连通性测试三条路都走这一个入口，
+// 并两把 SSH 到同一台机器上只会互相拖慢（返回的是同一次的结果，谁先叫谁拿到）。
+const probeFlights = new Map();   // device.id -> Promise
+function probeDevice(d) {
+  const cur = probeFlights.get(d.id);
+  if (cur) return cur;
+  const p = (async () => {
+    try {
+      const r = await fetch("/api/probe", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ host: d.host, user: d.user, pass: d.pass, os: d.os }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
+      d.frame = j.frame;
+      d.probeErr = "";
+      return { ok: true, frame: j.frame };
+    } catch (e) {
+      // 抓不到只记错误，**不把上一帧抹掉**：轮询起来后一次网络抖动就会让那块面板整节消失，
+      // 看着像"自动更新反而把数据弄没了"。抬头那格时间戳念的还是上一帧的时刻，停了多久一眼看得出来的。
+      d.probeErr = e.message || String(e);
+      return { ok: false, error: d.probeErr };
+    }
+  })();
+  probeFlights.set(d.id, p);
+  p.finally(() => probeFlights.delete(d.id));
+  return p;
+}
+// 抓帧轮询：一轮 = 把"填了地址且墙上看得见"的机器按顺序各抓一帧（每台之间隔 1.2 s，别同一瞬间捅四台），
+// 抓完歇 probeEveryMs 毫秒再来下一轮。开机那一次就是第一轮（所以打开页面先看到的数与轮询完全同源）。
+// 为什么"上一轮抓完才计时"而不是 setInterval：一轮本身实测 20~35 s（四台各 1.8~13 s），
+// 固定间隔会让第二轮压着第一轮跑，两台 SSH 叠在同一台机器上互相拖慢。
+// 成本账（2026-09-24 本机实测，供他调档位）：默认 15 s 一档 ≈ 一轮 25 s + 歇 15 s，
+// 也就是每台平均约 40 s 被敲一次；调到 3 s 那一档就是连轴转，别那么用。
+let probeTimer = 0, roundRunning = false;
+function scheduleProbeRound() {
+  clearTimeout(probeTimer);
+  probeTimer = setTimeout(probeRound, MONITOR_SETTINGS.probeEveryMs);
+}
+async function probeRound() {
+  if (roundRunning) return;
+  roundRunning = true;
   try {
-    const r = await fetch("/api/probe", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ host: d.host, user: d.user, pass: d.pass, os: d.os }) });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
-    d.frame = j.frame;
-    d.probeErr = "";
-    return { ok: true, frame: j.frame };
-  } catch (e) {
-    d.frame = null;
-    d.probeErr = e.message || String(e);
-    return { ok: false, error: d.probeErr };
+    for (const d of devices) {
+      // 藏起来的 / 落在关闭分区里的不抓：墙上都看不见它，没必要为它去敲那台机器
+      if (d.hidden || zoneOffOf(d) || !liveOf(d)) continue;
+      await probeDevice(d);
+      paintZoneColors();
+      // 抓到一帧就重画头部：面板是"按这一帧该建哪几节"建出来的，帧一到签名就变了。
+      // 这里必须走 refreshPerfHead（内部按 panelSig 决定要不要 buildPanel），不能只 paintPanel。
+      refreshPerfHead();
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+  } finally {
+    roundRunning = false;
+    scheduleProbeRound();
   }
 }
-// 开机各抓一帧：清单里填了地址的机器，打开页面时按顺序各抓一帧（每台隔 1.2 s，别同一瞬间捅四台）。
-// 只抓这一次 —— 之后还想再要真数据，就在那台的"连通性测试"上点一下。
-// 为什么不按采集频率自动轮询：Windows 那几台抓一帧要现起一个 PowerShell（实测 1.8~5.4 s），
-// 3 秒一轮等于让它们连轴转地开进程 —— 那是把同事的机器当监控对象使唤，不是这个原型干的事。
-// 抓不到的不影响别的：那台继续走模拟数据，屏上标"抓不到"。
+// 双击那一下的补抓：还没有帧就当场抓一次，不等下一轮（他报的"点开一直加载不出数据"就是这一段空窗）。
+// 有帧的情况不抓 —— 轮询会负责更新，双击不该变成"每点一下敲一次同事的机器"。
+async function probeIfFreshless(d) {
+  if (!liveOf(d) || d.frame) return;
+  await probeDevice(d);
+  paintZoneColors();
+  refreshPerfHead();
+}
+// 开机那一次 = 第一轮（下面 probeRound 的注释就是它的规矩）。这一条末尾的 sync() 只在开机走：
+// 一轮抓完要把清单与场景对一遍账，但那是重造整排机器的大动作，不能跟着轮询每轮做一次。
 async function bootProbe() {
-  for (const d of devices) {
-    // 藏起来的 / 落在关闭分区里的不抓：墙上都看不见它，没必要为它去敲那台机器
-    if (d.hidden || zoneOffOf(d) || !liveOf(d)) continue;
-    await probeDevice(d);
-    paintZoneColors();
-    // 抓到一帧就重画头部：面板是"按这一帧该建哪几节"建出来的，帧一到签名就变了。
-    // 这里必须走 refreshPerfHead（内部按 panelSig 决定要不要 buildPanel），不能只 paintPanel。
-    refreshPerfHead();
-    await new Promise((r) => setTimeout(r, 1200));
-  }
+  await probeRound();
   sync();
 }
 function showTip(html) {
@@ -538,7 +576,8 @@ function setMonitorSetting(key, value, quiet) {
   if (!Number.isFinite(v)) return;
   MONITOR_SETTINGS[key] = clampv(v, lim[0], lim[1]);
   try { localStorage.setItem(MS_KEY, JSON.stringify(MONITOR_SETTINGS)); } catch (e) { /* 无痕模式写不进去就算了 */ }
-  startBeat();
+  // 两格节拍各管各的定时器：intervalMs 重排本地那一拍，probeEveryMs 重排抓帧那一轮
+  if (key === "probeEveryMs") scheduleProbeRound(); else startBeat();
   if (!quiet) touchSettings();
 }
 let beatTimer = 0;
@@ -656,7 +695,7 @@ function focusStation(h) {
   moveTo(c, (r / Math.sin(Math.min(vFov, hFov) / 2)) * 1.25);
   focusRadius = r;
   const d = devices.find((x) => x.id === h.id);
-  if (d) showPerf(d);
+  if (d) { showPerf(d); probeIfFreshless(d); }
 }
 function stationOf(obj) {
   let o = obj;
@@ -698,11 +737,36 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
     磁盘B: [d.frame.diskUsedBytes, d.frame.diskTotalBytes], 卡: d.frame.gpu })),
   probeFail: () => devices.filter((d) => d.probeErr).map((d) => d.short + "：" + d.probeErr),
   probeOne: (short) => { const d = devices.find((x) => x.short === short); return d ? probeDevice(d) : "没有这台设备"; },
+  // 给他眼睛之外的仪器用：喂一份合成帧（cpu.perCore + cpu.coreMap + cpu.pcls），看它并成几张卡。
+  // 为什么需要这一格：混合架构（P/E）这台机器不是随时在线，而"一逻辑处理器一张卡 → 一物理核一张卡"
+  // 这件事必须能自己算自己核，不能靠"看着好像对了"。
+  cpuCardsOf: (f) => liveCpu(f).map((c) => ({ 卡: c.id, 核号: c.coreId, 是核: c.core, 型: c.kind,
+    占用: c.usage, 线程: c.threads.map((t) => t.id + ":" + t.usage) })),
+  // 走"真那条链"的看板读数：showPerf(d) 就是双击那条路的后半段，返回的是面板 actual 文字（不是换算结果）。
+  perfTextOf: (short) => {
+    const d = devices.find((x) => x.short === short);
+    if (!d) return "没有这台设备";
+    showPerf(d);
+    return perfEl.className + " | " + perfName.textContent + " | " + perfSub.textContent
+      + "\n" + perfBody.innerText;
+  },
   // 同上：脉冲的两个钩子在 ground.mjs 里，因为它们要拆 livePulses[].travel 这种内部字段。
   pulseRun,
   pulseCount,
-  pulseState: () => devices.map((d) => d.short + "|" + (d.power ? "on" : "off") + "|"
-    + ((loads.get(d.id) || {}).key || "-") + "|" + ((loads.get(d.id) || {}).pct || 0).toFixed(0) + "%"),
+  pulseState: () => devices.map((d) => {
+    const w = loads.get(d.id) || {};
+    return d.short + "|" + (d.power ? "on" : "off") + "|" + (w.key || "-") + "|"
+      + (w.pct == null ? "-" : w.pct.toFixed(0) + "%");
+  }),
+  // 抓帧轮询的读数：这一轮在不在跑、两格节拍各是多少、每台那一帧是多久之前抓的。
+  // 还有 probeNow() = 立刻跑一轮：自测不必干等 15 秒，它走的就是页面自己那条轮询路（不是另造的假数据）。
+  // 先问一句"这一轮在不在跑"：轮询本身是串行排期的（跑完才排下一轮），只有这个手勾能插出第二轮，
+  // 而两台机器同时被抓 = 真机 SSH 负载翻倍（18:09 实测踩过：手勾那一轮还没跑完又起了一轮）。
+  probeNow: () => (roundRunning ? "这一轮还在跑（一轮 20~45 秒，看几台机器几台在线）" : probeRound()),
+  probeState: () => ({ 轮询中: roundRunning, intervalMs: MONITOR_SETTINGS.intervalMs,
+    probeEveryMs: MONITOR_SETTINGS.probeEveryMs,
+    帧距今秒: devices.filter((d) => liveOf(d)).map((d) => d.short + ":"
+      + (d.frame ? Math.round((Date.now() - Date.parse(d.frame.at)) / 1000) : d.probeErr ? "失败" : "待抓")) }),
   pulseSettings: () => ({ ...PULSE_SETTINGS, intervalMs: MONITOR_SETTINGS.intervalMs }),
   // 设置存哪儿：部署成看板后"到底在读文件还是只在浏览器里"要能一问就答（屏上那行字也行，这里是给仪器用的）
   settingsMode: settingsState,

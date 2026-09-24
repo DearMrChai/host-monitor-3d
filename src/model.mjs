@@ -91,9 +91,13 @@ const CLUSTER_PER_ROW = 3;
 
 const OS_LABEL = { win: "Windows", linux: "Linux" };
 
-// 采集频率那一格的真值；定时器本身（beat / startBeat）还在页面里，只读这个数。
-const MONITOR_SETTINGS = { intervalMs: 3000 };
-const MON_LIMITS = { intervalMs: [200, 5000, 100] };
+// 采集节拍的两格真值；定时器本身（beat / 抓帧轮询）都在页面里，这里只放数。
+//   intervalMs    = 看板与地面"这一拍"的节拍（重画面板、重算档位，纯本地，不碰网络）
+//   probeEveryMs  = 每隔多久把"填了地址"的机器各抓一帧（从上一轮抓完开始计时）。
+// 上限放到 60 s：他要过"10 秒一轮"，原来那格 5 s 封顶根本调不到（2026-09-24）。
+// probeEveryMs 默认 15 s = 一轮实测 20~35 s（四台机各 1.8~13 s，含每台之间那 1.2 s）之后再歇 15 s。
+const MONITOR_SETTINGS = { intervalMs: 3000, probeEveryMs: 15000 };
+const MON_LIMITS = { intervalMs: [200, 60000, 100], probeEveryMs: [3000, 600000, 1000] };
 const MS_KEY = "hm.mon.v1";
 
 // 脚下脉冲 + 地面点阵 + 二进制雨的全部可调值：真源只有这一份，滑杆、settings.json、
@@ -180,7 +184,9 @@ export function setDevices(list) {
 // 换绑之后导入方仍然看着旧数组 —— 那正是上面 setDevices 要走函数的同一条理由。
 export const holders = [];      // 每台工作站：{ id, holder, model, div, b, stateLine, parts, 落位 x/z, hw/hd, footR }
 export const zoneMarks = [];    // 每个开放分区一组角铁 + 一块区名
-// 每台的负载（0~100）：填了地址+用户名且抓到过帧 → 用那一帧的真数，否则本地随机游走。
+// 每台的负载（0~100 或 null）：填了地址+用户名且抓到过帧 → 那一帧的真数；
+// 填了地址但还没抓到帧 → null（没有数就是没有数，不拿随机游走补一个档位出来）；
+// 没填地址的道具 → 本地随机游走。
 // 这一格同时是分级判定的输入，所以"看板上是什么数"和"脚下是什么颜色"是同一个来源。
 export const loads = new Map();   // device.id -> { pct, key }
 
