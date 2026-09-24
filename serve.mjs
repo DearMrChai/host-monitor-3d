@@ -6,7 +6,7 @@
 // 为什么要有它：file:// 下浏览器不能写盘，"编辑同步修改配置文件"必须走一次本地 HTTP。
 import { createServer } from "node:http";
 import { readFile, writeFile, rename, appendFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -25,6 +25,17 @@ const LOOPBACK = BIND === "127.0.0.1" || BIND === "localhost" || BIND === "::1";
 // （实测 Enabled=False），规则加上去也不会挡谁。而这个服务不做鉴权 —— 能连上的人就能读走整份
 // 设备清单（含明文口令），也能借 /api/probe 往任意主机打 SSH，所以来源得自己认。
 const ALLOW = (process.env.HM_ALLOW || "").split(",").map((s) => s.trim()).filter(Boolean);
+// 抓机器除了口令还可以认一把私钥：HM_SSH_KEY 指一个私钥文件路径。为什么需要它：14（笔记本）那台
+// 账号始终无密码，而它的 sshd 又写着 PasswordAuthentication no —— 只有口令这一条路时，连"试"都试不到，
+// 服务端直接回 All configured authentication methods failed。
+// 只在启动时读一次；读不到就在启动日志里点名报出来，不像"静默退回口令"那样把配置错吞掉。
+const SSH_KEY_FILE = process.env.HM_SSH_KEY || "";
+let SSH_KEY = null;
+let SSH_KEY_NOTE = "没配 HM_SSH_KEY：只有口令可试";
+if (SSH_KEY_FILE) {
+  try { SSH_KEY = readFileSync(SSH_KEY_FILE, "utf8"); SSH_KEY_NOTE = "已载入私钥 " + SSH_KEY_FILE; }
+  catch (e) { SSH_KEY_NOTE = "⚠ HM_SSH_KEY 指的私钥读不到：" + SSH_KEY_FILE + "（" + (e.code || e.message) + "）⇒ 这台仍只能试口令"; }
+}
 function fromAllowed(req) {
   if (!ALLOW.length) return true;
   const ip = String(req.socket.remoteAddress || "").replace(/^::ffff:/, "");
@@ -574,7 +585,10 @@ function probe({ host, user, pass, os }) {
       });
     });
     conn.on("error", (e) => fail(e.message));
-    conn.connect({ host, username: user, password: pass, readyTimeout: 8000, algorithms: { kex: ["ecdh-sha2-nistp256", "curve25519-sha256"] } });
+    // 私钥那一格只在真载入时才递进去：不配 HM_SSH_KEY 时这条 connect 与改动前逐字一致，
+    // 有口令的那几台照旧走口令（两格都给时 ssh2 先试公钥、不行再试口令）。
+    conn.connect({ host, username: user, password: pass, ...(SSH_KEY ? { privateKey: SSH_KEY } : {}),
+      readyTimeout: 8000, algorithms: { kex: ["ecdh-sha2-nistp256", "curve25519-sha256"] } });
   });
 }
 
@@ -704,4 +718,6 @@ createServer(async (req, res) => {
   console.log(LOOPBACK ? "来源：只认环回（别的机器连不上）"
     : ALLOW.length ? `来源：只放 ${ALLOW.join(" / ")}（外加环回）`
     : "⚠ 来源：不限制 —— 绑在非环回地址上又没给 HM_ALLOW，同网段谁能连上谁就能读走整份设备清单（含口令）");
+  // 有没有私钥直接决定"没填口令的那几台"抓不抓得到，所以启动就得看得见这一格
+  console.log("抓机器用的私钥：" + SSH_KEY_NOTE);
 });

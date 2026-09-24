@@ -46,6 +46,24 @@ Windows 上当看板那台要注意一件事：**在 SSH 会话里直接起 `nod
 **别指望防火墙替你挡**——比如 138 那台的 Windows 防火墙三个 profile 全是关的（实测 `Enabled=False`），
 规则加上去也拦不住谁，所以来源这道门只能服务自己认。不给 `HM_ALLOW` 时启动日志里会写一行"来源：不限制"的空心警告。
 
+**清单里"没填口令"的那几台抓不到数**：服务只认口令这一条认证路，账号无密码、sshd 又关着
+`PasswordAuthentication` 的机器（14 就是）只会回 `All configured authentication methods failed`。
+再给一个环境变量 `HM_SSH_KEY=<私钥文件路径>` 即可：服务启动时读一次，之后每台机器都先试这把公钥、
+再试清单里的口令（两行互不干扰，有口令的照旧）。公钥要装进**那台目标机**的授权档 —— Windows 上如果
+账号在 Administrators 组里，sshd 只认 `C:\ProgramData\ssh\administrators_authorized_keys`
+（`sshd_config` 的 `Match Group administrators` 段决定的，不是用户自己目录里那份）。
+配没配上，启动日志第一屏就写着：`抓机器用的私钥：已载入私钥 …` / `⚠ … 读不到` / `没配 HM_SSH_KEY`。
+
+```powershell
+# 目标机侧（管理员 PowerShell）：追加公钥，绝不覆盖已有行；ACL 收紧到 OpenSSH 认的样子
+$k = 'C:\ProgramData\ssh\administrators_authorized_keys'
+$pub = 'ssh-ed25519 AAAA... 你在那台生成的注释'
+$lines = @(); if (Test-Path $k) { $lines = @(Get-Content $k | Where-Object { $_.Trim() }) }
+if ($lines -notcontains $pub) { $lines += $pub }
+Set-Content -Path $k -Value $lines -Encoding ascii
+icacls $k /inheritance:r /grant '*S-1-5-18:F' /grant '*S-1-5-32-544:F'
+```
+
 ```powershell
 # 开机自启：计划任务跑一个"起看板.ps1"，脚本里先收掉旧实例（按命令行带 serve.mjs 找）再起新的。
 # 动作里头用 cmd 的 set "VAR=值"（写成 set VAR=值 && … 会把 && 前的空格算进值里，node 会报
