@@ -160,6 +160,19 @@ const STATES = [
   { key: "ALERT", cn: "高负载", color: 0xff0033, interval: 1.2, burst: 3, max: 100, amplitude: 1.2 },
 ];
 const stateOf = (load) => STATES.find((s) => load <= s.max) || STATES[STATES.length - 1];
+// 综合档位（2026-09-24 他裁的口径 B）。传进来的 pct 已经是"这一帧有多忙"的那一个数
+// （CPU 占用与 GPU 利用率取 max，算在 ground 的 realLoadOf 里），这一格只管两件事：
+//   ① 按上面那张阈值表定档；
+//   ② 内存越过高线时，把"空闲"抬到"活跃"——只抬这一档，永远抬不到"高负载"。
+// 内存为什么不并进 pct 一起 max：常驻高内存是常态不是事件，16 G 的笔记本日常就挂 85 %，
+// 并进去会把那台钉成永久黄/红，墙反而看不出"变化"了 —— 而变化检测就是这个看板存在的理由。
+// memPct 拿不到（道具、老探针）就是 null：null 一律不参与，不拿 0 顶位。
+const MEM_BOOST_PCT = 92;
+const gradeOf = (pct, memPct) => {
+  if (pct == null) return null;
+  const s = stateOf(pct);
+  return s.key === "IDLE" && typeof memPct === "number" && memPct >= MEM_BOOST_PCT ? STATES[1] : s;
+};
 
 // 配置文件里的每一行 → 场景里的设备对象：档位不认识退到 mATX，分区名不在表里就按档位自动落区。
 // 原来这段写在 loadDevices 里，整份换绑走不了导入方，所以搬进来。
@@ -188,7 +201,7 @@ export const zoneMarks = [];    // 每个开放分区一组角铁 + 一块区名
 // 填了地址但还没抓到帧 → null（没有数就是没有数，不拿随机游走补一个档位出来）；
 // 没填地址的道具 → 本地随机游走。
 // 这一格同时是分级判定的输入，所以"看板上是什么数"和"脚下是什么颜色"是同一个来源。
-export const loads = new Map();   // device.id -> { pct, key }
+export const loads = new Map();   // device.id -> { pct, memPct, key }  pct=CPU∥GPU 的 max，memPct=内存占用率（只用来抬档）
 
 // 不进来的有两种：① d.hidden（这台单独藏了）② 落在"已关闭分区"里的（z.off）。
 // 两种都只是不摆出来，那一行还留在 devices.json 里，分区和归属也一个字没动 —— 放出来就原样回来。
@@ -200,4 +213,4 @@ const levelOf = (d) => (d.power ? STATES.find((s) => s.key === (loads.get(d.id) 
 export { TIERS, tierOf, mkDev, seq, devices, SPACING, ZONES, ZONE_FIELD, ZONE_AISLE, ZONE_PITCH,
   ZC, ZONE_KEY_RE, ZONE_MAX, ZONE_OF_TIER, zoneKeyOf, zoneOf, CLUSTER_SPACING, CLUSTER_ROW_GAP,
   CLUSTER_PER_ROW, OS_LABEL, MONITOR_SETTINGS, MON_LIMITS, MS_KEY, PULSE_SETTINGS, PULSE_LIMITS,
-  PS_KEY, STATES, stateOf, zoneOffOf, levelOf };
+  PS_KEY, STATES, stateOf, gradeOf, MEM_BOOST_PCT, zoneOffOf, levelOf };

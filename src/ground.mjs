@@ -6,7 +6,7 @@
 // 反过来谁都不认页面 —— scene / clock / 写文件那三样由 initGround 递进来（同 fleet 那一刀）。
 import { THREE } from "./three.mjs";
 import { devices, holders, loads, PULSE_SETTINGS, PULSE_LIMITS, PS_KEY,
-  stateOf, levelOf, zoneOffOf, liveOf } from "./model.mjs";
+  stateOf, gradeOf, levelOf, zoneOffOf, liveOf } from "./model.mjs";
 import { clampv } from "./format.mjs";
 import { framePct } from "./dashboard.mjs";
 import { holderOf, paintLabel } from "./fleet.mjs";
@@ -476,13 +476,48 @@ function rainBounds() {
     光斑: binaryRain.bAng.length };
 }
 
-const realLoadOf = (d) => framePct(d.frame);
+// 一帧里的 GPU 利用率：f.gpus 是逐张（nvidia-smi 一行一张，142 那台两张就走这里），
+// f.gpu 是老字段（只第一张的四个数，Windows 出这个）。两张都在也只管取最大值，不去重复计数。
+// 一个数都没有（无 nvidia-smi 的机器 / 只有型号的）→ null：这一维整条退出，不拿 0 顶位。
+const frameGpuPct = (f) => {
+  if (!f) return null;
+  const xs = [];
+  for (const g of (f.gpus || [])) if (g && typeof g.util === "number") xs.push(g.util);
+  if (f.gpu && typeof f.gpu.util === "number") xs.push(f.gpu.util);
+  return xs.length ? Math.max.apply(null, xs) : null;
+};
+// 内存占用率：只从老字段 memUsedMb / memTotalMb 算，缺任何一边就是 null（道具没有帧）。
+const frameMemPct = (f) => (f && f.memTotalMb > 0 && typeof f.memUsedMb === "number"
+  ? (f.memUsedMb / f.memTotalMb) * 100 : null);
+// 这台"有多忙"= CPU 占用与 GPU 利用率里较大的那个（口径 B，2026-09-24 他裁）。
+// 142 跑推理时就是这个形状：两张卡吃满、CPU 只有个位数 —— 只看 CPU 它永远"空闲"。
+const realLoadOf = (d) => {
+  const f = d.frame;
+  const c = framePct(f);
+  const g = frameGpuPct(f);
+  if (c == null) return g;
+  if (g == null) return c;
+  return c > g ? c : g;
+};
+// 口径 B 的出场读数：**只报帧里有的那三样**（CPU 占用、GPU 利用率、内存占用率）与按它们算出的档。
+// 屏上那个数与这一格的差别（道具没有帧，屏上是本地游走）由调用方并排报出来 —— 差一眼看见，
+// 比在这里替它编一个"看起来对"的数有用。
+export const loadReport = (d) => {
+  const f = d.frame || null;
+  const cpu = framePct(f);
+  const gpu = frameGpuPct(f);
+  const memPct = frameMemPct(f);
+  const pct = realLoadOf(d);
+  const st = pct == null ? null : gradeOf(pct, memPct);
+  return { pct, cpu, gpu, memPct, key: st ? st.key : null,
+    boost: !!(st && st.key === "ACTIVE" && stateOf(pct).key === "IDLE") };
+};
 export function stepLoads(t) {
   for (const d of devices) {
     if (d.hidden || zoneOffOf(d)) continue;   // 屏幕上没有它 → 不用替它算分级
     let w = loads.get(d.id);
     if (!w) {
-      w = { pct: liveOf(d) ? null : 10 + Math.random() * 45, k: Math.random() * 6.283, key: null };
+      w = { pct: liveOf(d) ? null : 10 + Math.random() * 45, memPct: null, k: Math.random() * 6.283, key: null };
       loads.set(d.id, w);
     }
     const real = realLoadOf(d);
@@ -495,7 +530,10 @@ export function stepLoads(t) {
       const target = clampv(8 + wave * 76 + (Math.random() < 0.06 ? 32 : 0) + (Math.random() - 0.5) * 12, 0, 100);
       w.pct += (target - w.pct) * 0.28;
     }
-    const key = d.power && w.pct != null ? stateOf(w.pct).key : null;
+    // 道具（没填地址）没有帧，内存那一格必须跟着清成 null，不然一次真数会赖在游走机上不走
+    w.memPct = d.frame ? frameMemPct(d.frame) : null;
+    const st = d.power && w.pct != null ? gradeOf(w.pct, w.memPct) : null;
+    const key = st ? st.key : null;
     if (key !== w.key) {
       w.key = key;
       const h = holderOf(d);

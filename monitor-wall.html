@@ -377,7 +377,7 @@ import { devices, ZONES, ZONE_FIELD, zoneKeyOf, zoneOf, MONITOR_SETTINGS, MON_LI
 // 陈列层（一排机器 + 角铁 + 标注）在 src/fleet.mjs。这里只留"这一页"的接线：探针、提示浮层、装配。
 import { initFleet, rebuild, paintZoneColors } from "./src/fleet.mjs";
 // 地面层（脚下脉冲 / 点阵涟漪 / 二进制雨 / 每拍负载）。stepLoads 归它是因为"档位"这一维同时喂牌面与脚下。
-import { initGround, updateGround, updatePulses, stepLoads, pulseRun, pulseCount, groundStats, groundRun, rippleKick } from "./src/ground.mjs";
+import { initGround, updateGround, updatePulses, stepLoads, pulseRun, pulseCount, groundStats, groundRun, rippleKick, loadReport } from "./src/ground.mjs";
 // 设置层：齿轮那个弹窗 + 三份 JSON 的读写与防抖。sync / touch* 这几个名字页面还要用（探针回来要重排、
 // 陈列层要拿 touch 当"清单改过了"的信号），所以是真 import 不是注释。
 import { initSettings, sync, touchSettings, touch, loadDevices, settingsState, dialogState, bootFromFiles } from "./src/settings-ui.mjs";
@@ -757,6 +757,17 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
     const w = loads.get(d.id) || {};
     return d.short + "|" + (d.power ? "on" : "off") + "|" + (w.key || "-") + "|"
       + (w.pct == null ? "-" : w.pct.toFixed(0) + "%");
+  }),
+  // 口径 B 的读数：屏上那一档（loads 里那份，标签/脚下都读它）与"按帧里那三样该判成什么"并排列出来。
+  // 道具没有帧 ⇒ 两边必然不同（那台是本地游走），这个差别要看得见，不拿帧的口径去假装它也实测。
+  loadState: () => devices.map((d) => {
+    const r = loadReport(d);
+    const w = loads.get(d.id) || {};
+    const n = (v) => (v == null ? "—" : Math.round(v * 10) / 10);
+    return d.short + "|屏上=" + (w.key || "—") + " " + n(w.pct) + "%"
+      + "|按帧判=" + (r.key || "—") + " " + n(r.pct) + "%"
+      + "|CPU=" + n(r.cpu) + "|GPU=" + (d.frame ? (r.gpu == null ? "无这一维" : n(r.gpu)) : "无帧")
+      + "|内存=" + n(r.memPct) + "%" + (r.boost ? "（这一档是内存抬的）" : "");
   }),
   // 抓帧轮询的读数：这一轮在不在跑、两格节拍各是多少、每台那一帧是多久之前抓的。
   // 还有 probeNow() = 立刻跑一轮：自测不必干等 15 秒，它走的就是页面自己那条轮询路（不是另造的假数据）。
