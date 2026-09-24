@@ -1,7 +1,7 @@
 # host-monitor-3d
 
 Host Monitor 的 **3D 陈列架 / 监控墙原型**：程序化设备几何（机箱、笔记本、NAS、交换机、路由器、外设）
-+ 两页可直接双击打开的 HTML + 一个能真连机器的本地采集服务。
++ 两页 HTML（剪影架可双击直接开，监控墙要走本地服务，见下）+ 一个能真连机器的本地采集服务。
 
 **它还不是插件的一部分。** 目标是把 `chassis-geometry.mjs` / `desk-geometry.mjs` 这两个纯几何模块
 移植进 `dsh-plugin-host-monitor`，页面与 `serve.mjs` 是造它们、量它们、试它们的车间。
@@ -15,14 +15,16 @@ Host Monitor 的 **3D 陈列架 / 监控墙原型**：程序化设备几何（�
 
 ```
 npm i                  # three（校验用）+ ssh2（探测用），只装在本目录
-npm run check          # 灌内联副本 + 六节几何校验，全绿才算改对了
+npm run check          # 语法（含 HTML 里那段模块体）→ 灌剪影架的内联副本 → 六节几何校验
 npm start              # http://127.0.0.1:8123/monitor-wall.html
 ```
 
-不跑服务也能用：直接双击 HTML（`file://`）—— 只是编辑不落盘、SSH 那一条分支连不上后端。
+**监控墙这一页必须经 `npm start` 打开**：它的代码是真 import 本地 `.mjs` 的，而浏览器不许从 `file://`
+import 本地模块，所以双击打不开 —— 双击的话状态条上会直接写出这句话和该跑的命令。
+另一页 `silhouette-shelf.html`（剪影架）仍然可以双击：它嵌的是内联副本，代价是那一份得靠 `npm run check` 重灌。
 
-**部署成一块看板**（就一台机器自己看的那块屏）：把整个目录拷过去（`monitor-wall.html`、`serve.mjs`、
-`设备清单.json`、`设置.json`、`node_modules/`），在那台上 `node serve.mjs`，用它的浏览器开
+**部署成一块看板**（就一台机器自己看的那屏）：把整个目录拷过去（`monitor-wall.html`、`serve.mjs`、
+`src/`、两份 `*-geometry.mjs`、`设备清单.json`、`设置.json`、`node_modules/`），在那台上 `node serve.mjs`，用它的浏览器开
 `http://127.0.0.1:8123/monitor-wall.html`。服务只监听 127.0.0.1，所以看板只能在那台机器本机打开 ——
 这正好：一块墙上的屏不该被别人从别的机器上看。之后调参数不用去碰那台的浏览器，直接改它目录里的
 `设置.json`，墙上 5 秒内自己跟上。
@@ -65,16 +67,18 @@ Register-ScheduledTask -TaskName 'hm3d-monitor-wall' -Action $act -Trigger $trg 
 ```
 chassis-geometry.mjs   机箱与网络设备几何（9 个模型函数 + screenContent helper），可移植层
 desk-geometry.mjs      外设与桌面组合（复用上面那份，没有第二份几何），可移植层
-monitor-wall.html      监控墙原型
-silhouette-shelf.html  剪影架原型
+src/three.mjs          全场景唯一的 THREE 来源（双 CDN 兜底在这里，两页与两份几何都 import 它）
+monitor-wall.html      监控墙原型（几何与 three 都是真 import，所以必须经 serve.mjs 打开）
+silhouette-shelf.html  剪影架原型（嵌内联副本，可 file:// 双击）
 serve.mjs              本地服务：清单 / 分区 / 设置 三个文件的读写 + SSH 探一帧（Windows 走 PowerShell，Linux 走 sh）
-inject-geometry.mjs    把 .mjs 灌进两页（file:// 下浏览器不能 import 本地 ESM）
-verify-geometry.mjs    六节校验：内联可跑 / 内联 vs 源逐件比对 / 规格包围盒 / 同侧重合 / 正面射线 / 局部系复核
+check.mjs              一条命令的自检：语法（含 HTML 里那段模块体）→ 注入 → 几何校验
+inject-geometry.mjs    把 chassis-geometry.mjs 灌进剪影架那一页（只有它还吃内联副本）
+verify-geometry.mjs    六节校验：① 监控墙内联已撤 + 剪影架可跑 / ② 内联 vs 源逐件比对 / 规格包围盒 / 同侧重合 / 正面射线 / 局部系复核
 docs/                  尺寸与实测、移植指引、本地服务与数据源、立项前派单（留档）
 ```
 
-**改完 `.mjs` 必须 `npm run check`**：两页里嵌的是内联副本，不重灌就会跟源走散，
-而 `verify-geometry.mjs` ② 那一节就是专门抓这件事的（逐件世界 AABB 比对，17 个模型必须全 0 差异）。
+**改完 `.mjs` 必须 `npm run check`**：③ 那一节按 `docs/尺寸与实测.md` 的表逐件量包围盒，17 个模型全 OK 才算过；
+剪影架那一页嵌的是内联副本，不重灌就会跟源走散，② 就是抓这件事的（逐件世界 AABB 比对，9 个单机件必须全 0 差异）。
 
 ## 四条不能破的口径
 

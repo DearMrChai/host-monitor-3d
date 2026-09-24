@@ -1,5 +1,5 @@
-// 临时校验：① 内联副本语法可跑 ② 内联 vs .mjs 逐项一致 ③ 规格包围盒 ④ 同侧重合清点
-// ⑤ 正面相机射线（观众实际看见哪个面）
+// 几何校验：① 监控墙已撤内联副本 + 剪影架那份可跑 ② 内联 vs .mjs 逐项一致
+// ③ 规格包围盒 + 同侧重合清点 ④ 正面相机首击（观众实际看见哪个面）⑤ 定点射线 ⑥ 屏盖局部系实量
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import * as THREE from 'three';
 
@@ -103,12 +103,20 @@ const SPEC = {
 const src2 = await import('./chassis-geometry.mjs');
 const src1 = await import('./desk-geometry.mjs');
 const inl2 = await extract('silhouette-shelf.html', G2_NAMES);
-const inl1 = await extract('monitor-wall.html', [...G2_NAMES, ...G1_NAMES]);
 
-console.log('① 内联副本可跑：chassis', Object.keys(inl2).length, '个导出；desk', Object.keys(inl1).length, '个导出');
+// 监控墙那页已经改真 import 了（2026-09-24），所以对它要验的事换了一条：内联副本必须彻底没了、
+// 且两条 import 在位。留着这条断言是因为 inject-geometry 以前写的是两个文件——手滑改回去要立刻看见。
+{
+  const s = readFileSync('monitor-wall.html', 'utf8');
+  console.log('① 监控墙：内联副本已撤', !s.includes('const G2 = (() => {'),
+    '| chassis import', s.includes('from "./chassis-geometry.mjs"'),
+    '| desk import', s.includes('from "./desk-geometry.mjs"'),
+    '| THREE 单一来源', s.includes('from "./src/three.mjs"') && !/await import\(["']three["']\)/.test(s),
+    '；剪影架：内联副本可跑，chassis', Object.keys(inl2).length, '个导出');
+}
 
-console.log('\n② 内联 vs .mjs 逐项比对（包围盒 + 件数 + 每件世界 AABB）');
-for (const [name, mod] of Object.entries({ ...pick(src2, inl2, G2_NAMES), ...pick(src1, inl1, G1_NAMES) })) {
+console.log('\n② 内联 vs .mjs 逐项比对（包围盒 + 件数 + 每件世界 AABB）· 只剩剪影架这一份内联副本');
+for (const [name, mod] of Object.entries(pick(src2, inl2, G2_NAMES))) {
   if (name === 'screenContent') continue;
   const [a, b] = mod;
   const ga = a(), gb = b();

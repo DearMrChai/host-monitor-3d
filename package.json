@@ -8,7 +8,7 @@
     "start": "node serve.mjs",
     "inject": "node inject-geometry.mjs",
     "verify": "node verify-geometry.mjs",
-    "check": "node inject-geometry.mjs && node verify-geometry.mjs"
+    "check": "node check.mjs"
   },
   "dependencies": {
     "ssh2": "^1.17.0",

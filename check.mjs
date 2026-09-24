@@ -1,0 +1,41 @@
+// 一条命令的自检：语法（含 HTML 里那段模块体）→ 几何注入 → 几何对账。
+// 为什么不引 linter：这一仓库的纪律是零构建，`node --check` 就是唯一门槛（见 README「怎么跑」）。
+// HTML 那段必须单独提出来量：它占整页 3200 多行，而 node 不认 .html。
+import { readFileSync, writeFileSync, unlinkSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+
+function check(label, code, file) {
+  writeFileSync(file, code);
+  const r = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+  unlinkSync(file);
+  if (r.status !== 0) {
+    console.log('✗', label, '\n' + (r.stderr || '').trim().split('\n').slice(0, 6).join('\n'));
+    process.exitCode = 1;
+    return false;
+  }
+  const n = code.split('\n').length;
+  console.log('✓', label, n, '行');
+  return true;
+}
+
+// HTML 里 <script type="module"> 的那一体（含 file:// 兜底那段经典脚本之外的全部）
+const html = readFileSync('monitor-wall.html', 'utf8');
+const a = html.indexOf('<script type="module">');
+const body = html.slice(a + '<script type="module">'.length, html.indexOf('</script>', a));
+check('monitor-wall.html 模块体', body, '_check_wall.mjs');
+
+for (const f of [...readdirSync('.').filter((x) => x.endsWith('.mjs')), 'src/three.mjs']) {
+  if (f === 'check.mjs' || f.startsWith('_check_')) continue;
+  check(f, readFileSync(f, 'utf8'), '_check_one.mjs');
+}
+
+for (const step of ['inject-geometry.mjs', 'verify-geometry.mjs']) {
+  const r = spawnSync(process.execPath, [step], { encoding: 'utf8' });
+  process.stdout.write(r.stdout || '');
+  if (r.status !== 0) {
+    console.log('✗', step, '\n' + (r.stderr || '').trim());
+    process.exitCode = 1;
+    break;
+  }
+}
+console.log(process.exitCode ? '\n自检未过（上面是差在哪一行）' : '\n自检全过');

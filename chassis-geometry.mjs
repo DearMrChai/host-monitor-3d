@@ -14,7 +14,7 @@
 // 导出 = 9 个模型函数（laptopClosed / laptopOpen / chassisITX / chassisMATX / chassisATX / chassisEATX
 //        + nasQNAP / switch8 / routerAX）+ 1 个 helper（screenContent，屏幕内容层，要传屏幕宽高，不是模型）。
 
-import * as THREE from 'three';
+import { THREE } from './src/three.mjs';
 
 // 真实尺寸（毫米），出处见 docs/尺寸与实测.md
 const MATX = { w: 205, h: 440, d: 347.5 }; // 乔思伯 D31

@@ -8,7 +8,7 @@
 // 组合是 Group，只含子件几何与本地变换，不写死任何全局姿态。
 // 本模块顶层不碰 document / window / renderer，node 可直接 import。
 
-import * as THREE from 'three';
+import { THREE } from './src/three.mjs';
 import { laptopOpen, chassisITX, chassisMATX, chassisATX, chassisEATX, screenContent } from './chassis-geometry.mjs';
 
 // 真实尺寸（毫米），出处见 docs/尺寸与实测.md
