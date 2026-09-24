@@ -16,3 +16,6 @@ probe.log
 _inline_*.mjs
 _prev.mjs
 *.tmp
+
+# A/B 对照用的隔离台（端口/数据目录都跟真那份分开；每刀重建一次，不比完就删）
+_ab/

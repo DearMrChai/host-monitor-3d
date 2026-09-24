@@ -172,7 +172,26 @@ export function setDevices(list) {
   ));
 }
 
+// ---------- 场景里那三份"活"的状态 + 两个共用判据（T5 刀5 从页面搬进来）----------
+// 为什么不留在页面、也不塞进 fleet：holders / zoneMarks 由 fleet 整份重建，但视角层（双击拾取、聚焦取景、
+// 全景距离）和地面层（脉冲落点、涟漪节拍、标注那行字）都要读它；loads 由地面层的模拟器写、fleet 的分级读。
+// 放在状态层，三边都朝下 import，谁都不是别人的上层。
+// ⚠ 三个都只能"就地改"（length = 0 再 push），不许整份换绑：ESM 的 live binding 只对导出方自己的赋值生效，
+// 换绑之后导入方仍然看着旧数组 —— 那正是上面 setDevices 要走函数的同一条理由。
+export const holders = [];      // 每台工作站：{ id, holder, model, div, b, stateLine, parts, 落位 x/z, hw/hd, footR }
+export const zoneMarks = [];    // 每个开放分区一组角铁 + 一块区名
+// 每台的负载（0~100）：填了地址+用户名且抓到过帧 → 用那一帧的真数，否则本地随机游走。
+// 这一格同时是分级判定的输入，所以"看板上是什么数"和"脚下是什么颜色"是同一个来源。
+export const loads = new Map();   // device.id -> { pct, key }
+
+// 不进来的有两种：① d.hidden（这台单独藏了）② 落在"已关闭分区"里的（z.off）。
+// 两种都只是不摆出来，那一行还留在 devices.json 里，分区和归属也一个字没动 —— 放出来就原样回来。
+// ① 在 fleet 的 rebuild 里判，这一格只管 ②（它要对着 ZONES 查，属于状态层的事）。
+const zoneOffOf = (d) => { const z = ZONES.find((q) => q.key === zoneKeyOf(d)); return !!(z && z.off); };
+// 这台现在算哪一档（关机就没有档）：标注那行字、脚下脉冲、涟漪节拍三处读同一个判据，所以放状态层。
+const levelOf = (d) => (d.power ? STATES.find((s) => s.key === (loads.get(d.id) || {}).key) : null);
+
 export { TIERS, tierOf, mkDev, seq, devices, SPACING, ZONES, ZONE_FIELD, ZONE_AISLE, ZONE_PITCH,
   ZC, ZONE_KEY_RE, ZONE_MAX, ZONE_OF_TIER, zoneKeyOf, zoneOf, CLUSTER_SPACING, CLUSTER_ROW_GAP,
   CLUSTER_PER_ROW, OS_LABEL, MONITOR_SETTINGS, MON_LIMITS, MS_KEY, PULSE_SETTINGS, PULSE_LIMITS,
-  PS_KEY, STATES, stateOf };
+  PS_KEY, STATES, stateOf, zoneOffOf, levelOf };
