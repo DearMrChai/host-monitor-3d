@@ -135,7 +135,7 @@ const SET_SHAPE = {
   pulse: { enabled: "bool", pulseStartBrightness: "num", pulseEndBrightness: "num",
     upParticleBrightness: "num", travelK: "num" },
   ground: { rippleEnabled: "bool", rippleHeight: "num", rippleSpeed: "num",
-    rippleThickness: "num", rippleBrightness: "num", rainEnabled: "bool", rainBrightness: "num" },
+    rippleThickness: "num", rippleBrightness: "num", dotSeg: "num", dotSizeMm: "num", rainEnabled: "bool", rainBrightness: "num" },
   monitor: { intervalMs: "num" },
 };
 // 文件第一行那句人话。放在服务端而不是页面里：整份删掉重建时也得有人写这一句，

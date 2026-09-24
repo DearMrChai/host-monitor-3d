@@ -302,18 +302,23 @@
            所以这里的光晕只靠贴图柔光＋叠加混合，比参考暗一档是预期。</p>
       </section>
       <section class="pane" id="cat-ground">
-        <div class="ph"><b>地面涟漪</b><span class="cnt">点阵地面被脉冲激起的环</span><span class="grow"></span>
+        <div class="ph"><b>地面涟漪</b><span class="cnt">点阵地面自己荡的环</span><span class="grow"></span>
           <button id="rippleOn" class="mini pw on" type="button" aria-pressed="true">涟漪 开</button></div>
         <div id="rippleRows"></div>
         <div class="ph ph-gap"><b>二进制雨</b><span class="cnt">背景那圈下落的 0/1</span><span class="grow"></span>
           <button id="rainOn" class="mini pw on" type="button" aria-pressed="true">雨 开</button></div>
         <div id="rainRows"></div>
-        <p class="fine">地面是一张 3.2 万点的点阵（181×181，替掉了原来的网格线），平静时暗蓝待机；每次脉冲爆发
-           从设备脚下激起一圈涟漪向外荡，环与环会互相穿过叠加。涟漪和雨各有自己的开关，
-           跟"脉冲 开/关"互不牵连：脉冲关了脚下安静，地面和雨照旧荡。
+        <p class="fine">地面是一张点阵（默认 321×321 = 10.3 万点、点距 75 mm，替掉了原来的网格线；"点阵密度"那格可拉疏到 61² = 3.7 千点、也可拉密到 361² = 13 万点）。开着涟漪时它做两件事：
+           整张地按两列正弦慢慢起伏（这层底波不需要谁去踢，涟漪自己带），以及每台开机设备按自己负载档位的
+           间隔（空闲 3.0s／活跃 2.0s／高负载 1.2s）从脚下起一圈向外荡的环，环与环互相穿过叠加。
+           涟漪与脉冲是两个独立效果：关掉"脉冲 开/关"地面照荡，关掉"涟漪 开/关"点阵原地静止（不找回原来的网格线）。
+           涟漪滑杆里 height 同时管涟漪环和底波的高低，brightness 同时管两者的明暗；
+           "点阵密度"只换采样分辨率、不动任何波形系数——密出来的是同一圈波用更碎的点画，不是另一圈波。
+           "点径"管每一粒画多大（默认 56 mm = 参考里那个写死值）：想看清"一粒一粒"就把它压到点距的一半以下，
+           拉大则点手拉手连成一片。点是加法混合叠的，越密越大整片越亮，嫌亮就把 brightness 或点径往回拉。
            二进制雨布在地图外围一圈圆柱壳上（不是参考里那面单侧幕布 —— 我们是轨道相机，
            转到哪一面它都该是背景）。参考页那层 UnrealBloom 辉光没带（派单禁 three/examples/），
-           比参考暗一档是预期。五格滑杆与两颗开关都实时生效，值同脉冲一起写回 设置.json 的 ground 那一组。</p>
+           比参考暗一档是预期。七格滑杆与两颗开关都实时生效，值同脉冲一起写回 设置.json 的 ground 那一组。</p>
       </section>
       <section class="pane" id="cat-mon">
         <div class="ph"><b>采集频率</b><span class="cnt">看板与脉冲分级共用的节拍</span></div>
@@ -2240,15 +2245,16 @@ function startBeat() {
 const PULSE_SETTINGS = {
   enabled: false,              // 总开关：关掉 = 立刻停发 + 把还在飞的清干净（不是"停发不停飞"那种慢收尾）
                                // 2026-09-23 按用户要求默认关（部署成看板先安静起步）。
-                               // ⚠ 涟漪是"脉冲爆发时踢一脚"才有的 —— 这个开关关着，地面就一直是平的，
-                               //   要看见涟漪得先打开它（或把 设置.json 里 pulse.enabled 改成 true）。
+                               // 这一颗只管脚下那一圈粒子环。地面涟漪在 2026-09-24 已经脱钩，
+                               // 自己按每台的分级节拍起圈（见 stepRipples），关脉冲地面照荡。
   pulseStartBrightness: 0.95,  // 刚发射时的不透明度
   pulseEndBrightness: 0.03,    // 飞到最远端时的不透明度（越小越"划过去就没"）
   // 参考给的是 0.35，但那是"相机 48 单位看 6 单位的机器"；这里全景相机离地十几米，
   // 一束 60 粒挤在几个像素宽里，叠加混合直接饱和成白柱，颜色全丢。所以默认压到 0.22，
   // 要更亮自己拖那一格（滑杆上限仍是 1）。
   upParticleBrightness: 0.22,  // 向上粒子整体亮度，独立于脉冲，免得两个通道互相盖
-  travelK: 6,                  // 扩散范围 = 机器本体 footprint 半径 × 这个系数（mATX 那一档 ≈ 1.0 m）
+  travelK: 18,                 // 扩散范围 = 机器本体 footprint 半径 × 这个系数
+                               // 2026-09-24 用户裁定"直径至少是现在的 3 倍"：6 → 18（mATX 那一档半径 ≈ 3 m）。
   // ---- 地面涟漪 + 二进制雨（2026-09-23 融合，参考在 涟漪地面/ 与 docs/参考-数字雨/）----
   // 两颗开关互相独立、也独立于上面的 enabled：脉冲关了脚下安静，地面和雨照旧。
   rippleEnabled: true,
@@ -2256,6 +2262,11 @@ const PULSE_SETTINGS = {
   rippleSpeed: 10,             // 环每秒荡多远（参考单位/秒）：10 像水面、40 像冲击波
   rippleThickness: 1.0,        // 环厚度：0.3 一圈激光环、4 一片水波
   rippleBrightness: 0.25,      // 点阵被点亮的程度（参考推荐"克制"档）
+  // 点阵密度 = 地面每边的段数：顶点 (n+1)²，点距 = 24000/n mm。它只换采样分辨率，
+  // 不动涟漪/底波的任何系数（那些公式在参考单位里）——见 RippleTerrain.syncDots 的注释。
+  dotSeg: 320,                 // 2026-09-24：以前写死 180（点距 133 mm），用户自己拉到点距 75 mm 那档后裁为默认
+  dotSizeMm: 56,               // 单个点的直径（世界毫米）：56 = 参考的 0.7 单位 × GROUND_S，即以前写死的那个值
+                               // 这颗管"每一粒画多大"，上面那颗管"一粒一粒摆多密"——两颗分开才配得出"密而不糊"
   rainEnabled: true,
   rainBrightness: 0.8,         // 数字雨不透明度上限就是 0.8（再高加法混合糊成一片）
 };
@@ -2263,12 +2274,18 @@ const PULSE_LIMITS = {
   pulseStartBrightness: [0.05, 1, 0.01],
   pulseEndBrightness: [0.02, 0.8, 0.01],
   upParticleBrightness: [0.02, 1, 0.01],
-  travelK: [2, 16, 0.5],
+  travelK: [2, 24, 0.5],
   // 范围照参考参数表的"建议范围"：height 0~8 / speed 5~50 / thickness 0.3~4 / brightness 0~2 / rain 0~0.8
   rippleHeight: [0, 8, 0.1],
   rippleSpeed: [5, 50, 1],
   rippleThickness: [0.3, 4, 0.1],
   rippleBrightness: [0, 2, 0.05],
+  // 密度档：60 段 = 400 mm 点距（疏得能看见一格一格），360 段 = 66.7 mm 点距 = 13 万顶点。
+  // 上限没有再往上给：点径是 0.7 参考单位 = 56 mm，再密点就互相压着连成一片光，那不是"更密的点阵"是"一块地皮"。
+  dotSeg: [60, 360, 20],
+  // 点径：8 mm ≈ 看不见（一像素都不到），56 = 参考原值，112 一档已经比默认档的点距(75)还大——点是加法混合的，
+  // 直径一大相邻点就糊成一整片，"点阵"就读不出来了。上限给到 112 是留给他"故意要糊"的试法。
+  dotSizeMm: [8, 112, 2],
   rainBrightness: [0, 0.8, 0.01],
 };
 const PS_KEY = "hm.pulse.v1";
@@ -2303,7 +2320,8 @@ function setPulseEnabled(on, quiet) {
 }
 
 // 三级分级：结构照参考保留（颜色 / 间隔 / 单次爆发几连），max = 这一档的负载上限（%）。
-// amplitude 是地面涟漪的强度（参考值：空闲 0.6 / 活跃 0.85 / 警报 1.2），跟脚下脉冲同一拍激起。
+// amplitude 是地面涟漪的强度（参考值：空闲 0.6 / 活跃 0.85 / 警报 1.2）。2026-09-24 起它只被
+// 涟漪自己的节拍 stepRipples 读，脚下脉冲不再带着它 —— 三档的"颜色/间隔"两边仍同源，所以读法没散。
 // 阈值是我先定的，要聊就改这三格，别的都不用动。
 const STATES = [
   { key: "IDLE", cn: "空闲", color: 0x00ff41, interval: 3.0, burst: 1, max: 35, amplitude: 0.6 },
@@ -2351,38 +2369,75 @@ const tailTex = tailTexture();
 
 // ---------- 地面：点阵涟漪地形（2026-09-23 融合，参考 = 涟漪地面/ 那两份）----------
 // 参考是"300 单位一张地、相机离地几十单位"的口径；这里 1 单位 = 1 mm、地面要铺满 24000 mm。
-// 换算纪律跟脚下脉冲同一条：几何建在**参考单位**里（300×300、180 细分），整张 mesh 乘 GROUND_S
-// 放大到毫米 —— 于是公式里的 0.5 / 0.008 / 100 / 150 / 4.0 一个都不用改，参考那张调参表 1:1 成立。
-// 只有点径这种"材质尺寸"不受 mesh.scale 管（three 的 point size 是世界单位），单独乘一次 GROUND_S。
+// 换算纪律跟脚下脉冲同一条：几何建在**参考单位**里（300×300，每边段数 = PULSE_SETTINGS.dotSeg），整张 mesh 乘 GROUND_S
+// 放大到毫米 —— 于是公式里的 0.5 / 0.008 / 100 / 150 / 4.0 一个都不用改，参考那张调参表 1:1 成立，
+// 而且密度滑杆拉的只是"同一圈波用多碎的点画"。
+// 只有点径这种"材质尺寸"不受 mesh.scale 管（three 的 point size 是世界单位），所以 dotSizeMm 直接就是毫米：
+// 默认 56 = 参考那个 0.7 单位 × GROUND_S，换算在定默认值时做一次，运行时代码里没有乘法。
 const GROUND_S = 80;   // 1 参考单位 = 80 mm：300 单位 × 80 = 24000 mm，正好替掉原 GridHelper 那张地
 const RIPPLE_MAX_AGE = 4.0;   // 参考写死 4 秒（folder 版参数表里没有寿命滑杆，就不造一个）
 const RIPPLE_MAX = 32;        // 同时存活的环数上限（8 台全 ALERT 稳态约 27 个，留点余量）
-const GROUND_SEG = 180;       // 参考的性能上限：180×180 → 181² = 32761 顶点
-const GROUND_STEP = 300 / GROUND_SEG;
+// 每边段数不再有常量：它就是 PULSE_SETTINGS.dotSeg（默认 320 → 321² = 103041 顶点，点距 75 mm），
+// 合法范围只写在 PULSE_LIMITS.dotSeg 一处。两颗旋钮都只在 RippleTerrain.syncDots() 一处落地。
+// 涟漪自己那层"底波"（2026-09-24 用户裁定：涟漪要自己带波动，默认开着）——
+// 整张地按两列正弦慢慢起伏，不需要谁去踢一脚。它跟涟漪共用一颗开关：关涟漪时地面彻底静止（T4 裁的"点阵原地不动"）。
+// 振幅/亮度都挂在既有滑杆上（rippleHeight 管高低、rippleBrightness 管亮暗），所以没往 设置.json 里加新键。
+// k = 每参考单位的相位（0.055 → 波长 ≈ 114 单位 ≈ 9 m，比区宽还大，看着是"地在呼吸"而不是"水面波纹"）；
+// s = 每秒推进多少弧度（0.55 → 一轮约 11 秒）。
+const BREATH = { amp: 0.3, glow: 1.6, k1: 0.055, k2: 0.115, s1: 0.55, s2: 0.85 };
 class RippleTerrain {
   constructor(sc) {
-    this.geometry = new THREE.PlaneGeometry(300, 300, GROUND_SEG, GROUND_SEG);
-    this.geometry.rotateX(-Math.PI / 2);
-    this.count = this.geometry.attributes.position.count;
-    const colors = new Float32Array(this.count * 3);
-    for (let i = 0; i < this.count; i++) {   // 平静时 = 待机电路板那种暗蓝
-      colors[i * 3] = 0.02; colors[i * 3 + 1] = 0.06; colors[i * 3 + 2] = 0.15;
-    }
-    this.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     this.material = new THREE.PointsMaterial({
-      size: 0.7 * GROUND_S, map: dotTex, vertexColors: true, transparent: true, opacity: 0.85,
+      size: PULSE_SETTINGS.dotSizeMm, map: dotTex, vertexColors: true, transparent: true, opacity: 0.85,
       blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
     });
-    this.mesh = new THREE.Points(this.geometry, this.material);
+    this.mesh = new THREE.Points(new THREE.BufferGeometry(), this.material);
     this.mesh.scale.setScalar(GROUND_S);
     this.mesh.position.y = -1;   // 原 GridHelper 的高度：机器脚踩在点阵上，不悬空也不陷进去
     sc.add(this.mesh);
+    this.geometry = null;
     this.ripples = [];
     this.flat = true;   // 上一个无涟漪帧已经把地面抹平过 → 没涟漪时不必每帧重写三万个顶点
     this.lut = new Float32Array(257);   // 波形查表（见 update 里的注释）
     this.lutThick = NaN;
     this.lutBand = 0;
-    this.rowLists = Array.from({ length: GROUND_SEG + 1 }, () => []);   // 每行落在哪些环带里
+    this.t = 0;
+    this.seg = -1;   // 让第一次 syncDots 一定落进"重建"那条路
+    this.syncDots();
+  }
+  // 点阵的两颗旋钮：dotSizeMm = 一粒画多大（世界毫米），dotSeg = 一粒一粒摆多密（每边段数）。
+  // 密这一颗只换**采样分辨率**：涟漪环与底波的公式全在参考单位里（0.5 / 0.008 / 100 / 150 / BREATH 的 k），
+  // 一个数都不跟着 seg 走，所以加密前后同一次涟漪的高度、环宽、波长是同一份数学，只是点更碎。
+  // "读设置 → 收进合法范围 → 不一样才动"只有这一个地方；三条来路（拖滑杆 / 5 秒读文件 / 启动恢复）都走它。
+  syncDots() {
+    const limS = PULSE_LIMITS.dotSizeMm, limG = PULSE_LIMITS.dotSeg;
+    const vs = Number(PULSE_SETTINGS.dotSizeMm);
+    const size = clampv(Number.isFinite(vs) ? vs : limS[0], limS[0], limS[1]);
+    if (size !== this.material.size) this.material.size = size;   // 点径只是材质上一个数，不涉几何
+    const vg = Number(PULSE_SETTINGS.dotSeg);
+    const seg = Math.round(clampv(Number.isFinite(vg) ? vg : limG[0], limG[0], limG[1]));
+    if (seg === this.seg) return false;
+    PULSE_SETTINGS.dotSeg = seg;   // 文件里手写过 61.5 这种数，落回"实际生效值"，别让标签跟网格两个数
+    const n = seg + 1;
+    this.seg = seg;
+    this.step = 300 / seg;
+    const g = new THREE.PlaneGeometry(300, 300, seg, seg);
+    g.rotateX(-Math.PI / 2);
+    this.count = g.attributes.position.count;
+    const colors = new Float32Array(this.count * 3);
+    for (let i = 0; i < this.count; i++) {   // 平静时 = 待机电路板那种暗蓝
+      colors[i * 3] = 0.02; colors[i * 3 + 1] = 0.06; colors[i * 3 + 2] = 0.15;
+    }
+    g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    if (this.geometry) this.geometry.dispose();   // 换档就把上一张显存 buffer 交回去
+    this.geometry = g;
+    this.mesh.geometry = g;
+    this.rowLists = Array.from({ length: n }, () => []);   // 每行落在哪些环带里
+    // 底波（涟漪自己带的那层起伏）的行列因子表：可分离成一个"列向量 × 行向量"，
+    // 于是每帧只需 4×n 次 sin，几万个顶点里只做乘法和加法。
+    this.b1x = new Float32Array(n); this.b1z = new Float32Array(n);
+    this.b2x = new Float32Array(n); this.b2z = new Float32Array(n);
+    this.flat = true;   // 新建的网格本就全平、底色已铺待机蓝，第一帧不用再抹一遍
   }
   addRipple(x, z, colorHex, amplitude = 1) {
     const c = new THREE.Color(colorHex);
@@ -2393,7 +2448,20 @@ class RippleTerrain {
     while (this.ripples.length > RIPPLE_MAX) this.ripples.shift();
   }
   clear() { this.ripples.length = 0; }
+  // 底波的行列因子：每帧重算 4×(seg+1) 次 sin，顶点里只做乘法
+  breathStep() {
+    const t = this.t, seg = this.seg, step = this.step;
+    const k1 = BREATH.k1, k2 = BREATH.k2, s1 = BREATH.s1, s2 = BREATH.s2;
+    for (let i = 0; i <= seg; i++) {
+      const c = -150 + i * step;
+      this.b1x[i] = Math.sin(c * k1 + t * s1);
+      this.b1z[i] = Math.sin(c * k1 + t * s1 * 0.8);
+      this.b2x[i] = Math.sin(c * k2 - t * s2);
+      this.b2z[i] = Math.sin(c * k2 + t * s2 * 1.2);
+    }
+  }
   update(delta) {
+    this.syncDots();   // 换档就整张网格重造：下面所有数组都是新几何的，所以这一句必须在取数组之前
     const positions = this.geometry.attributes.position.array;
     const colors = this.geometry.attributes.color.array;
     const height = PULSE_SETTINGS.rippleHeight;
@@ -2401,13 +2469,15 @@ class RippleTerrain {
     const thickness = PULSE_SETTINGS.rippleThickness;
     const brightness = PULSE_SETTINGS.rippleBrightness;
     const maxAge = RIPPLE_MAX_AGE;
+    this.t += delta;
+    const breath = PULSE_SETTINGS.rippleEnabled;   // T4：涟漪关了以后地面连底波一起静住
     for (let i = this.ripples.length - 1; i >= 0; i--) {
       const r = this.ripples[i];
       r.age += delta;
       r.radius = r.age * speed;
       if (r.age >= maxAge || r.radius > 150) this.ripples.splice(i, 1);
     }
-    if (!this.ripples.length) {
+    if (!this.ripples.length && !breath) {
       if (this.flat) return;
       for (let i = 0; i < this.count; i++) {
         positions[i * 3 + 1] = 0;
@@ -2419,6 +2489,7 @@ class RippleTerrain {
       return;
     }
     this.flat = false;
+    if (breath) this.breathStep();
     // 两刀性能（公式本身一个字没动，改的是"哪些顶点要算"和"exp/sin 算几次"）：
     // ① 波形 sin(d·0.5)·exp(-d²/(t²·100)) 只跟 d 和 thickness 有关 → 厚度没变就查表，
     //    把每顶点两次超越函数换成一次取整下标（256 格，步长约 0.2 参考单位 = 16 mm）。
@@ -2435,8 +2506,9 @@ class RippleTerrain {
       this.lutBand = band;
     }
     const lut = this.lut, lutBand = this.lutBand, inv = 256 / (2 * lutBand);
+    const seg = this.seg, step = this.step;   // 密度滑杆改的就是这两个：下面所有下标换算都走它们
     const rows = this.rowLists;
-    for (let iy = 0; iy <= GROUND_SEG; iy++) rows[iy].length = 0;
+    for (let iy = 0; iy <= seg; iy++) rows[iy].length = 0;
     for (let k = 0; k < this.ripples.length; k++) {
       const r = this.ripples[k];
       r.k = (1 - r.age / maxAge) * Math.exp(-r.radius * 0.008) * r.amplitude;
@@ -2444,26 +2516,36 @@ class RippleTerrain {
       r.outer2 = outer * outer;
       const inner = Math.max(0, r.radius - band);
       r.inner2 = inner * inner;
-      const row0 = Math.max(0, Math.floor((r.z - outer + 150) / GROUND_STEP));
-      const row1 = Math.min(GROUND_SEG, Math.ceil((r.z + outer + 150) / GROUND_STEP));
+      const row0 = Math.max(0, Math.floor((r.z - outer + 150) / step));
+      const row1 = Math.min(seg, Math.ceil((r.z + outer + 150) / step));
       for (let iy = row0; iy <= row1; iy++) rows[iy].push(k);
     }
-    for (let iy = 0; iy <= GROUND_SEG; iy++) {
+    for (let iy = 0; iy <= seg; iy++) {
       const list = rows[iy];
-      const rowBase = iy * (GROUND_SEG + 1) * 3;
-      if (!list.length) {   // 整行无环：仍要写平（上一帧这里可能正隆着）
-        for (let ix = 0; ix <= GROUND_SEG; ix++) {
+      const rowBase = iy * (seg + 1) * 3;
+      if (!list.length && !breath) {   // 整行无环：仍要写平（上一帧这里可能正隆着）
+        for (let ix = 0; ix <= seg; ix++) {
           const p = rowBase + ix * 3;
           positions[p + 1] = 0;
           colors[p] = 0.02; colors[p + 1] = 0.06; colors[p + 2] = 0.15;
         }
         continue;
       }
-      const bz = -150 + iy * GROUND_STEP;
-      for (let ix = 0; ix <= GROUND_SEG; ix++) {
-        const bx = -150 + ix * GROUND_STEP;
+      const bz = -150 + iy * step;
+      const z1 = breath ? this.b1z[iy] : 0, z2 = breath ? this.b2z[iy] : 0;
+      const bh = breath ? height * BREATH.amp : 0;
+      for (let ix = 0; ix <= seg; ix++) {
+        const bx = -150 + ix * step;
         let y = 0;
         let cr = 0.02, cg = 0.06, cb = 0.15;
+        if (breath) {
+          // 两列可分离正弦相加再折半：取值范围正好 [-1,1]。亮度只把待机色整体抬起（不引入新色相），
+          // 于是"地自己在呼吸"读起来是同一种暗蓝在明暗间走，而不是多了一层别的颜色的波。
+          const w = (this.b1x[ix] * z1 + this.b2x[ix] * z2) * 0.5;
+          y = w * bh;
+          const g = 1 + Math.abs(w) * BREATH.glow * brightness;
+          cr *= g; cg *= g; cb *= g;
+        }
         for (let q = 0; q < list.length; q++) {
           const r = this.ripples[list[q]];
           const dx = bx - r.x, dz = bz - r.z;
@@ -2491,10 +2573,14 @@ class RippleTerrain {
   }
 }
 const rippleTerrain = new RippleTerrain(scene);
+const rippleRt = new Map();   // device.id -> { next }  涟漪自己的节拍，跟 pulseRt 无关
 function setRippleEnabled(on, quiet) {
   PULSE_SETTINGS.rippleEnabled = !!on;
   try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); } catch (e) { /* 同上 */ }
-  if (!PULSE_SETTINGS.rippleEnabled) rippleTerrain.clear();   // 同脉冲开关：关掉这一帧地面就平
+  if (!PULSE_SETTINGS.rippleEnabled) {
+    rippleTerrain.clear();
+    for (const rt of rippleRt.values()) rt.next = null;   // 重新打开时相位重错，不"关五分钟一开全场同拍"
+  }
   if (!quiet) touchSettings();
 }
 
@@ -2598,9 +2684,51 @@ function setRainEnabled(on, quiet) {
   try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); } catch (e) { /* 同上 */ }
   if (!quiet) touchSettings();
 }
-function updateGround(delta) {
+// 地面的数值正对照：截图是黑的（WebGL 抓帧的老毛病），"底波在不在动"只能靠顶点高度取证。
+// 起伏取的是 |y| 之和：正余弦一场下来 y 的和本身接近 0（一半隆一半凹），拿代数和会永远读出一个像零的数。
+function terrainBounds() {
+  const p = rippleTerrain.geometry.attributes.position.array;
+  const c = rippleTerrain.geometry.attributes.color.array;
+  let y0 = Infinity, y1 = -Infinity, abs = 0, lit = 0;
+  for (let i = 0; i < p.length; i += 3) {
+    const y = p[i + 1];
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+    abs += Math.abs(y);
+    if (Math.abs(y) > 0.02) lit++;   // 单位是参考单位（1 = 80 mm），这一线就是"离地 1.6 mm 以上"
+  }
+  return { 起伏mm: [Math.round(y0 * GROUND_S), Math.round(y1 * GROUND_S)],
+    起伏绝对和mm: Math.round(abs * GROUND_S), 隆起点数: lit };
+}
+function updateGround(delta, t) {
+  stepRipples(t);
   rippleTerrain.update(delta);
   binaryRain.update(delta);
+}
+// 涟漪自己的节拍（2026-09-24 脱钩）：以前这圈环是"脉冲爆发时顺手踢一脚"才有的，
+// 于是关了脉冲地面就一直是平的 —— 用户裁定两者是独立的两个效果。现在每台按自己负载档位
+// 的间隔（空闲 3.0s / 活跃 2.0s / 高负载 1.2s）自己起圈，颜色与强度仍取自同一张 STATES 表，
+// 所以"脚下什么色 = 什么档位"这条读法跟脉冲完全一致，只是两套计时器互不牵连。
+function stepRipples(t) {
+  if (!PULSE_SETTINGS.rippleEnabled) return;
+  const spread = Math.max(1, holders.length);
+  let i = 0;
+  for (const d of devices) {
+    const h = holderOf(d);
+    if (!h) continue;   // 收起的 / 已关闭分区里的：屏幕上没有它，地面也不替它荡
+    i++;
+    let rt = rippleRt.get(d.id);
+    if (!rt) { rt = { next: null }; rippleRt.set(d.id, rt); }
+    const st = levelOf(d);
+    if (!st) { rt.next = null; continue; }
+    // 首次错开相位：不然几台在同一瞬间一起起圈，地面看着像被人同时拍了一把
+    if (rt.next === null) rt.next = t + (i * st.interval) / spread;
+    // 落后多少都只补一圈（不追帧）：切到后台再回来那一瞬，不该在原地撒出十几圈
+    if (t >= rt.next) {
+      rippleTerrain.addRipple(h.x, h.z, st.color, st.amplitude);
+      rt.next = t + st.interval;
+    }
+  }
 }
 // 雨壳的数值正对照：截图是黑的（WebGL 抓帧的老毛病），"壳围着地图"这件事只能靠半径/高度范围证明
 function rainBounds() {
@@ -2652,6 +2780,7 @@ const livePulses = [];
 const liveUp = [];
 const pulseRt = new Map();   // device.id -> { nextBurst, queue }
 let probeT = 0;              // 自检钩子的时间戳（跨次调用单调，见 __hm 里 pulseRun 的注释）
+let probeGT = 0;             // 同上，给 groundRun 用（不跟脉冲共用一个，免得推地面把脉冲的相位也推走）
 
 function makePoints(n, color, size, map) {
   const pos = new Float32Array(n * 3);
@@ -2665,10 +2794,9 @@ function makePoints(n, color, size, map) {
 }
 
 // 一次"爆发"= 按 burst 次数排进延迟队列，间隔 0 / 0.2 / 0.35s，形成"嘟"、"嘟嘟"、"嘟嘟嘟"的节奏
-// amplitude 一起进队：地面涟漪跟脚下环同一拍、同一色、同一强度激起（三连发 = 三圈先后荡出）
 function triggerBurst(rt, st, t) {
   for (let i = 0; i < st.burst; i++) {
-    rt.queue.push({ at: t + (i === 0 ? 0 : i === 1 ? 0.2 : 0.35), color: st.color, amplitude: st.amplitude });
+    rt.queue.push({ at: t + (i === 0 ? 0 : i === 1 ? 0.2 : 0.35), color: st.color });
   }
 }
 
@@ -2725,18 +2853,24 @@ function updatePulses(dt, t) {
     for (const rt of pulseRt.values()) { rt.queue.length = 0; rt.nextBurst = null; }
     return;
   }
-  holders.forEach((h, i) => {
-    const d = devices[i];
-    let rt = d && pulseRt.get(d.id);
-    if (d && !rt) { rt = { nextBurst: null, queue: [] }; pulseRt.set(d.id, rt); }
-    const st = d && levelOf(d);
+  // 遍历的是 devices 而不是 holders：收起了某台、关掉了某个分区之后，holders 比 devices 短，
+  // 按同一个下标配对会整体错位一格（A 台的地盘上发 B 台的环）。holderOf 才是这两张表的对应关系。
+  const spread = Math.max(1, holders.length);
+  let i = 0;
+  for (const d of devices) {
+    const h = holderOf(d);
+    if (!h) continue;   // 屏幕上没有它：不发环，也不替它排下一轮
+    i++;
+    let rt = pulseRt.get(d.id);
+    if (!rt) { rt = { nextBurst: null, queue: [] }; pulseRt.set(d.id, rt); }
+    const st = levelOf(d);
     if (!st) {
       // 关机 / 设备已删：排队的丢掉，已经在飞的让它跑完寿命自然散（跟参考"停发不停飞"一致）
-      if (rt) { rt.queue.length = 0; rt.nextBurst = null; }
-      return;
+      rt.queue.length = 0; rt.nextBurst = null;
+      continue;
     }
     // 首次给一个错开的相位：不然五台在同一瞬间一起发、然后一起静默半秒
-    if (rt.nextBurst === null) rt.nextBurst = t + (i * st.interval) / Math.max(1, holders.length);
+    if (rt.nextBurst === null) rt.nextBurst = t + (i * st.interval) / spread;
     if (t >= rt.nextBurst) {
       triggerBurst(rt, st, t);
       rt.nextBurst = t + st.interval;
@@ -2744,14 +2878,13 @@ function updatePulses(dt, t) {
     for (let j = rt.queue.length - 1; j >= 0; j--) {
       if (t < rt.queue[j].at) continue;
       const color = rt.queue[j].color;
-      const amp = rt.queue[j].amplitude;
       rt.queue.splice(j, 1);
       spawnPulse(h, color);
       spawnUpward(h, color);
-      // 地面涟漪跟脚下环同一拍激起（独立开关，脉冲关着它也可以自己在荡）
-      if (PULSE_SETTINGS.rippleEnabled) rippleTerrain.addRipple(h.x, h.z, color, amp);
+      // 地面涟漪不再在这里激起：2026-09-24 用户裁定两个效果要各自独立，
+      // 环的节拍挪到了下面自己的 stepRipples（关脉冲也照荡）。
     }
-  });
+  }
 
   for (let i = livePulses.length - 1; i >= 0; i--) {
     const p = livePulses[i];
@@ -3117,7 +3250,7 @@ for (const o of [
   { key: "upParticleBrightness", limits: PULSE_LIMITS.upParticleBrightness, title: "向上粒子亮度",
     hint: "那缕往上飘的数据流。独立一格，免得跟脉冲亮度互相抢。", fmt: pctFmt },
   { key: "travelK", limits: PULSE_LIMITS.travelK, title: "脉冲范围",
-    hint: "扩散半径 = 机器本体（不含显示器/键鼠）底面半径 × 这个倍数。6 大约是台间距的一半，再大就穿到邻居家脚下。", fmt: mmFmt },
+    hint: "扩散半径 = 机器本体（不含显示器/键鼠）底面半径 × 这个倍数。默认 18 ≈ 一环 6 m 直径（2026-09-24 定的\"至少 3 倍\"），会越过脚下铺到邻机那一片。", fmt: mmFmt },
 ]) {
   uiPaints.push(sliderRow(document.getElementById("pulseRows"), {
     title: o.title, hint: o.hint, limits: o.limits, fmt: o.fmt,
@@ -3146,16 +3279,25 @@ pulseOnBtn.addEventListener("click", () => { setPulseEnabled(!PULSE_SETTINGS.ena
 paintPulseOn();
 uiPaints.push(paintPulseOn);
 
-// 地面与雨：四格涟漪滑杆 + 一格雨亮度，跟脉冲滑杆同一条 sliderRow / 同一份 PULSE_SETTINGS
+// 地面与雨：六格涟漪滑杆（含点阵密度、点径两颗点阵旋钮）+ 一格雨亮度，跟脉冲滑杆同一条 sliderRow / 同一份 PULSE_SETTINGS
 for (const o of [
   { key: "rippleHeight", title: "涟漪高度", fmt: (v) => v.toFixed(1),
-    hint: "0 = 环只亮不起伏（水面静谧感）；0.5 轻触、2.5 投石、8 山丘。参考推荐 0.5 / 2.5。" },
+    hint: "0 = 环只亮不起伏（水面静谧感）；0.5 轻触、2.5 投石、8 山丘。参考推荐 0.5 / 2.5。地面那层自己走的底波也吃这一格。" },
   { key: "rippleSpeed", title: "涟漪速度", fmt: (v) => v.toFixed(0),
     hint: "环每秒荡多远。10 像水面涟漪、22 有脉冲节奏、50 像冲击波扫过。" },
   { key: "rippleThickness", title: "涟漪环厚度", fmt: (v) => v.toFixed(1),
     hint: "0.3 一圈激光环、1.0 精细、4 一片水波。过大环会糊在一起失去\"环\"形。" },
   { key: "rippleBrightness", title: "涟漪亮度", fmt: pctFmt,
     hint: "点阵被点亮的程度。0 只剩起伏看不见环；2 过曝发白。参考推荐 0.25 克制档。" },
+  { key: "dotSeg", title: "点阵密度", fmt: (v) => (24000 / v).toFixed(0) + " mm",
+    hint: "两个点之间隔多少毫米（默认 75 = 2026-09-24 定下来的档）。往左疏、往右密：60 段 = 400 mm 一格一格，"
+      + "360 段 = 67 mm（13 万个点，比默认档再多三成，机器差就往回拉）。"
+      + "只改采样密度，涟漪的高度/环宽/波长一个数都没跟着变。密了以后整张地会更亮——点是加法混合叠的，"
+      + "要么把上面那格涟漪亮度往回拉，要么把下面那格点径往回拉。" },
+  { key: "dotSizeMm", title: "点径", fmt: (v) => v.toFixed(0) + " mm",
+    hint: "一粒点画多大（世界毫米），默认 56 = 参考里那个 0.7 单位。跟密度是两回事：上面那格管"
+      + "\"摆多密\"，这一格管\"多大一粒\"。拉小 = 点更分明、整片更暗（加法混合叠的面积小了），"
+      + "拉大 = 糊成地皮。想看清\"一粒一粒\"就把它压到点距的一半以下。" },
 ]) {
   uiPaints.push(sliderRow(document.getElementById("rippleRows"), {
     title: o.title, hint: o.hint, limits: PULSE_LIMITS[o.key], fmt: o.fmt,
@@ -3212,6 +3354,8 @@ function settingsToFile() {
       rippleSpeed: PULSE_SETTINGS.rippleSpeed,
       rippleThickness: PULSE_SETTINGS.rippleThickness,
       rippleBrightness: PULSE_SETTINGS.rippleBrightness,
+      dotSeg: PULSE_SETTINGS.dotSeg,
+      dotSizeMm: PULSE_SETTINGS.dotSizeMm,
       rainEnabled: PULSE_SETTINGS.rainEnabled,
       rainBrightness: PULSE_SETTINGS.rainBrightness,
     },
@@ -3242,7 +3386,7 @@ function applySettings(o) {
   if (g && typeof g === "object") {
     if (typeof g.rippleEnabled === "boolean" && g.rippleEnabled !== PULSE_SETTINGS.rippleEnabled) { setRippleEnabled(g.rippleEnabled, true); changed = true; }
     if (typeof g.rainEnabled === "boolean" && g.rainEnabled !== PULSE_SETTINGS.rainEnabled) { setRainEnabled(g.rainEnabled, true); changed = true; }
-    for (const k of ["rippleHeight", "rippleSpeed", "rippleThickness", "rippleBrightness", "rainBrightness"]) {
+    for (const k of ["rippleHeight", "rippleSpeed", "rippleThickness", "rippleBrightness", "dotSeg", "dotSizeMm", "rainBrightness"]) {
       const lim = PULSE_LIMITS[k], v = Number(g[k]);
       if (!Number.isFinite(v)) continue;
       const nv = clampv(v, lim[0], lim[1]);
@@ -3722,6 +3866,10 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
     for (let i = 1; i <= steps; i++) updatePulses(0.05, base + i * 0.05);
     probeT = base + steps * 0.05;
     return { 环: livePulses.length, 上飘: liveUp.length,
+      // 环半径取证：travel 就是这一圈能飞到的最远距离，跟脚下 footprint 半径的比就是 travelK。
+      // 报"最大那台"是因为八台 footprint 不同，要按台看就读 footRmm 那一串。
+      环半径mm: livePulses.length ? Math.round(Math.max(...livePulses.map((p) => p.travel))) : 0,
+      footRmm: holders.map((h) => Math.round(h.footR)),
       粒子数: livePulses.reduce((a, p) => a + p.angles.length, 0) + liveUp.reduce((a, p) => a + p.sp.length, 0),
       场景内Points: scene.children.filter((o) => o.type === "Points").length,
       // 只含 updatePulses 的 CPU 提交时间，不含绘制与合成 —— GPU 侧要开人眼/帧率看
@@ -3737,13 +3885,21 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
   // 地面与雨的读数：开关、活涟漪数、点阵规模、雨的不透明度（后台标签页 rAF 不跑时用 groundRun 手推）
   ground: () => ({ 涟漪开关: PULSE_SETTINGS.rippleEnabled, 雨开关: PULSE_SETTINGS.rainEnabled,
     活涟漪: rippleTerrain.ripples.length, 顶点: rippleTerrain.count, 地面平: rippleTerrain.flat,
+    段数: rippleTerrain.seg, 点距mm: Math.round(24000 / rippleTerrain.seg),
     雨不透明: +binaryRain.rainMat.opacity.toFixed(3), 光斑不透明: +binaryRain.bokehMat.opacity.toFixed(3),
     点径mm: rippleTerrain.material.size, 放大: rippleTerrain.mesh.scale.x,
-    地面边长mm: Math.round(300 * GROUND_S), 地面高度mm: rippleTerrain.mesh.position.y, ...rainBounds() }),
+    地面边长mm: Math.round(300 * GROUND_S), 地面高度mm: rippleTerrain.mesh.position.y, ...rainBounds(), ...terrainBounds() }),
   groundRun: (steps) => {
+    // 时间基准跨次调用保持单调（同 pulseRun 那次订正）：否则 stepRipples 的下一拍会一直算在"未来"，
+    // 手推多少帧都撒不出一个环，成本读数就成了假的低。
+    const base = Math.max(probeGT, clock.elapsedTime);
     const t0 = performance.now();
-    for (let i = 0; i < steps; i++) updateGround(0.05);
-    return { 每帧CPU毫秒: +((performance.now() - t0) / steps).toFixed(3), 活涟漪: rippleTerrain.ripples.length };
+    for (let i = 0; i < steps; i++) updateGround(0.05, base + (i + 1) * 0.05);
+    probeGT = base + steps * 0.05;
+    return { 每帧CPU毫秒: +((performance.now() - t0) / steps).toFixed(3), 活涟漪: rippleTerrain.ripples.length,
+      底波: PULSE_SETTINGS.rippleEnabled, 时刻: +probeGT.toFixed(2),
+      节拍: devices.map((d) => d.short + "→" + (((rippleRt.get(d.id) || {}).next) == null ? "-"
+        : (((rippleRt.get(d.id) || {}).next) - probeGT).toFixed(1))) };
   },
   // 正对照：手动撒 n 个涟漪，量"有环"时的每帧成本（跟 groundRun 空跑对比才知道环带剔除省了多少）
   rippleKick: (n) => {
@@ -3859,7 +4015,7 @@ function tick() {
   const dt = Math.min(0.05, clock.getDelta());
   if (spinning) az += 0.0016;
   updatePulses(dt, clock.elapsedTime);
-  updateGround(dt);
+  updateGround(dt, clock.elapsedTime);
   if (focusing) {
     target.lerp(want.target, 0.14);
     dist += (want.dist - dist) * 0.14;
