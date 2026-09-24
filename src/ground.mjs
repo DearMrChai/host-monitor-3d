@@ -333,33 +333,71 @@ const RAIN_S = 400;
 const RAIN_R0 = 40000, RAIN_R1 = 54000;
 const RAIN_TOP = 80 * RAIN_S;        // 参考雨柱高 80 单位（再高的看不见：地平线以上就那么一条）
 const RAIN_BOTTOM = -5 * RAIN_S;     // 参考落到 y<−5 就重生
+// ---------- #39 的两颗新增（2026-09-24 他挑的"2 + 1"）----------
+// 字形表 = 参考那一句的全部：它往纹理里烤的只有 0 和 1（`Math.random() > 0.5 ? '0' : '1'`，整页只掷一次，
+// 所以 800 颗共用同一个字符、从头到尾不变）。"字会在落下时换"就是把那一次掷改成每颗一路在掷，
+// 字符集一个字没加 —— 哪天要扩成 0-9，只改这一串，图集格数与着色器里那个除数都跟着它走。
+const RAIN_GLYPHS = "01";
+// 容量一次配满，滑杆只改 drawRange：换档不重建 buffer、不新起 Float32Array。少画的那几百颗冻在原位，
+// 往回拉就接着下（雨本来就是无序重生，看不出来）。这一格必须等于 PULSE_LIMITS.rainCount 的上限，
+// 两边各写一个数迟早走散 —— verify-rain.mjs 里钉着这条对账。
+const RAIN_CAP = 3200;
+// 每颗隔多久换一个字（秒）。参考没这件事，所以口径只能定在"看着像不像活物"：0.25 = 一秒最多抖 4 下，
+// 再快就是电视雪花，再慢跟不换字没区别。区间内随机，免得整场在同一帧一起翻脸。
+const RAIN_FLIP_MIN = 0.25, RAIN_FLIP_MAX = 0.9;
+const rainFlipWait = () => RAIN_FLIP_MIN + Math.random() * (RAIN_FLIP_MAX - RAIN_FLIP_MIN);
 function rainGlyphTexture() {
   const c = document.createElement("canvas");
-  c.width = c.height = 128;
+  c.width = 128 * RAIN_GLYPHS.length; c.height = 128;   // 横排图集：一格一个字，格宽 = 高度
   const x = c.getContext("2d");
   x.font = 'bold 100px "Courier New", monospace';
   x.textAlign = "center"; x.textBaseline = "middle";
   x.shadowColor = "#00aaff"; x.shadowBlur = 15;
   x.fillStyle = "#ffffff";
-  x.fillText(Math.random() > 0.5 ? "0" : "1", 64, 64);
+  for (let i = 0; i < RAIN_GLYPHS.length; i++) x.fillText(RAIN_GLYPHS[i], 64 + i * 128, 64);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
 class BinaryRain {
   constructor(sc) {
-    const n = 800;
+    const n = RAIN_CAP;
     const pos = new Float32Array(n * 3);
     this.speeds = new Float32Array(n);
-    for (let i = 0; i < n; i++) this._respawn(pos, i, true);
+    this.glyph = new Float32Array(n);   // 这一颗现在用图集里第几格（着色器读的就是它）
+    this.flip = new Float32Array(n);    // 还有多久换字（秒）
+    for (let i = 0; i < n; i++) {
+      this._respawn(pos, i, true);
+      this.glyph[i] = (Math.random() * RAIN_GLYPHS.length) | 0;
+      this.flip[i] = rainFlipWait();
+    }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("aGlyph", new THREE.BufferAttribute(this.glyph, 1));
+    this.n = -1;   // -1 = 逼第一次 syncCount 一定落进"改 drawRange"那条路（同点阵 syncDots 的写法）
+    this.flips = 0;                  // 累计换字次数：两次读数之差就是"屏上真的在换字"的取证
     // fog:false：雨在 40~54 m 外，吃我们那条线性雾（20~46 m）会被吞成灰，背景层就该一直在
     this.rainMat = new THREE.PointsMaterial({ color: 0x0088ff, size: 1.8 * RAIN_S, map: rainGlyphTexture(),
       transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
       sizeAttenuation: true, fog: false });
+    // 每颗取图集中属于它的那一格。只改采样坐标这一句：粒径 / 亮度 / 加法混合 / pixelRatio 那套管子
+    // 仍走 PointsMaterial 自己的（重写成 ShaderMaterial 就得自己算 scale = 画布高 × 像素比，多一处会跟渲染器走散的地方）。
+    this.rainMat.onBeforeCompile = (sh) => {
+      sh.vertexShader = "attribute float aGlyph;\nvarying float vGlyph;\n"
+        + sh.vertexShader.replace("void main() {", "void main() {\n\tvGlyph = aGlyph;");
+      sh.fragmentShader = "varying float vGlyph;\n" + sh.fragmentShader.replace(
+        "#include <map_particle_fragment>",
+        "#ifdef USE_MAP\n"
+        + "\tvec2 pcoord = vec2( ( floor( vGlyph ) + gl_PointCoord.x ) / " + RAIN_GLYPHS.length + ".0, 1.0 - gl_PointCoord.y );\n"
+        + "\tvec2 uv = ( uvTransform * vec3( pcoord, 1 ) ).xy;\n"
+        + "\tdiffuseColor *= texture2D( map, uv );\n#endif");
+    };
+    // three 按"材质类型 + 参数"缓存 program，不看 onBeforeCompile 里改了什么。不给键，地面点阵那颗
+    // PointsMaterial 会跟它撞成同一份程序（症状 = 雨对了、地上的点开始串字）。
+    this.rainMat.customProgramCacheKey = () => "hm-rain-atlas";
     this.rain = new THREE.Points(geo, this.rainMat);
     sc.add(this.rain);
+    this.syncCount();   // 一上来就按滑杆那格画，别先把 3200 颗满容量画一帧
 
     const m = 150;
     const bpos = new Float32Array(m * 3);
@@ -392,17 +430,40 @@ class BinaryRain {
     arr[i * 3 + 2] = Math.sin(a) * r;
     this.speeds[i] = (3 + Math.random() * 5) * RAIN_S;   // 参考 3~8 单位/秒 → 毫米/秒
   }
+  // "更密"这一格落地：滑杆写的是颗数，这里只把画出去的数量挪一挪（容量在构造时就配满）。
+  // 钳到 RAIN_CAP 是防手改 settings.json 写个 99999 —— drawRange 超过顶点数，WebGL 会照着 buffer
+  // 边界外的内存画，报不报错看运气，而屏上先花。
+  syncCount() {
+    const n = Math.max(0, Math.min(RAIN_CAP, Math.round(Number(PULSE_SETTINGS.rainCount) || 0)));
+    if (n === this.n) return false;
+    this.n = n;
+    this.rain.geometry.setDrawRange(0, n);
+    return true;
+  }
   update(delta) {
     const gb = PULSE_SETTINGS.rainEnabled ? PULSE_SETTINGS.rainBrightness : 0;
     this.rainMat.opacity = gb;
     this.bokehMat.opacity = gb * 0.8;
-    if (!PULSE_SETTINGS.rainEnabled) return;   // 关着 = 不透明度 0 且粒子冻住，省掉每帧 950 次写
+    this.syncCount();   // 关着也同步：那一格数字改了，屏上重新开雨时画的颗数就得跟着
+    if (!PULSE_SETTINGS.rainEnabled) return;   // 关着 = 不透明度 0 且粒子冻住，省掉每帧上千次写
     const pos = this.rain.geometry.attributes.position.array;
-    for (let i = 0; i < this.speeds.length; i++) {
+    const gn = RAIN_GLYPHS.length;
+    let glyphDirty = false;
+    for (let i = 0; i < this.n; i++) {
       pos[i * 3 + 1] -= this.speeds[i] * delta;
       if (pos[i * 3 + 1] < RAIN_BOTTOM) this._respawn(pos, i, false);
+      this.flip[i] -= delta;
+      if (this.flip[i] <= 0) {
+        // 换字得真换出一个别的：偏移取 1 ~ gn-1 再取模，所以只有两个字符时它必定翻转
+        // （照着参考那句掷硬币的话写，会有一半时间"换"完还是同一个字，抖一下就白丢了）
+        this.glyph[i] = (this.glyph[i] + 1 + ((Math.random() * (gn - 1)) | 0)) % gn;
+        this.flip[i] = rainFlipWait();
+        this.flips++;
+        glyphDirty = true;
+      }
     }
     this.rain.geometry.attributes.position.needsUpdate = true;
+    if (glyphDirty) this.rain.geometry.attributes.aGlyph.needsUpdate = true;
     const bpos = this.bokeh.geometry.attributes.position.array;
     for (let i = 0; i < this.bAng.length; i++) {
       this.bAng[i] += this.bW[i] * delta;
@@ -469,21 +530,32 @@ function stepRipples(t) {
   }
 }
 // 雨壳的数值正对照：截图是黑的（WebGL 抓帧的老毛病），"壳围着地图"这件事只能靠半径/高度范围证明
+// #39 的两样也走这里取证：在画的颗数（更密）与累计换字次数（字形会变）——后者隔一秒读两次，
+// 差值 > 0 才算"字真的在换"，而雨开关关掉之后它必须不再涨（同一条路上的负对照）。
 function rainBounds() {
   const p = binaryRain.rain.geometry.attributes.position.array;
+  const n = binaryRain.n;
+  const dist = new Array(RAIN_GLYPHS.length).fill(0);
   let r0 = Infinity, r1 = -Infinity, y0 = Infinity, y1 = -Infinity, ySum = 0;
-  for (let i = 0; i < p.length; i += 3) {
-    const rr = Math.hypot(p[i], p[i + 2]);
+  for (let i = 0; i < n; i++) {
+    dist[binaryRain.glyph[i]]++;
+    const k = i * 3;
+    const rr = Math.hypot(p[k], p[k + 2]);
     if (rr < r0) r0 = rr;
     if (rr > r1) r1 = rr;
-    if (p[i + 1] < y0) y0 = p[i + 1];
-    if (p[i + 1] > y1) y1 = p[i + 1];
-    ySum += p[i + 1];
+    if (p[k + 1] < y0) y0 = p[k + 1];
+    if (p[k + 1] > y1) y1 = p[k + 1];
+    ySum += p[k + 1];
   }
-  return { 雨滴: p.length / 3, 壳半径mm: [RAIN_R0, RAIN_R1], 雨柱高mm: RAIN_TOP,
+  return { 雨滴: n, 雨滴容量: p.length / 3,
+    // GPU 被告知画几颗（drawRange.count）：这一格和上面那格不等 = 滑杆写进了设置但没接到几何上
+    画到第几颗: binaryRain.rain.geometry.drawRange.count,
+    壳半径mm: [RAIN_R0, RAIN_R1], 雨柱高mm: RAIN_TOP,
     字径mm: binaryRain.rainMat.size, 最慢mm每秒: 3 * RAIN_S, 最快mm每秒: 8 * RAIN_S,
     雨半径mm: [Math.round(r0), Math.round(r1)], 雨高度mm: [Math.round(y0), Math.round(y1)],
     雨Y和mm: Math.round(ySum),   // 两次读数不同 = 雨真在下（关掉开关后应当不动）
+    字形格数: RAIN_GLYPHS.length, 字形分布: dist,   // 两边都该有数：只有一格 = 图集没被逐颗用上
+    换字累计: binaryRain.flips, 换字间隔秒: [RAIN_FLIP_MIN, RAIN_FLIP_MAX],
     光斑: binaryRain.bAng.length };
 }
 

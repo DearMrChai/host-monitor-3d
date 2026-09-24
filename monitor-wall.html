@@ -824,6 +824,15 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
   // 地面与雨的读数是 ground.mjs 自己出的（它才是 rippleTerrain / binaryRain 的主人），这里只留键名。
   ground: groundStats,
   groundRun,
+  // 上一帧真的交了多少个点给 GPU：这是"雨那 1600 颗在不在画面清单里"的唯一非眼睛读数。
+  // 用法是把雨开关拨一下再读一次 —— 差值应当正好是 颗数 + 光斑数（150），不是"看着少了"。
+  // 为什么不能靠截图：WebGL 那张 canvas 不 preserveDrawingBuffer，抓出来是黑的。
+  rendererInfo: () => ({ 帧: renderer.info.render.frame, 调用: renderer.info.render.calls,
+    点数: renderer.info.render.points }),
+  // 后台标签页 rAF 不跑 ⇒ 上面那格会一直停在旧帧，而"雨的字变没变"这件事必须有一次真渲染才知道
+  // （着色器是第一次画到才编译的）。这一格就是手动补那一帧，跟 tick 里画的是同一句。
+  renderOnce: () => { renderer.render(scene, camera); return { 帧: renderer.info.render.frame,
+    调用: renderer.info.render.calls, 点数: renderer.info.render.points, 程序数: renderer.info.programs.length }; },
   rippleKick,
   pulseLabels: () => holders.map((h) => h.stateLine.textContent + " [" + h.stateLine.className + "]"),
   // 分区读数：每台落在哪个区、区框在地面的范围、全景距离

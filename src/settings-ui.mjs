@@ -380,10 +380,16 @@ for (const o of GRADE_ROWS) {
   }));
 }
 uiPaints.push(sliderRow(document.getElementById("rainRows"), {
-  title: "雨亮度", hint: "0 隐藏、0.3 远景氛围、0.8 雨成主角。上限就是 0.8，再高加法混合糊成一片。",
+  title: "雨亮度", hint: "0 隐藏、0.3 远景氛围、0.8 雨成主角（= 参考原来的上限）。再往上到 1.2 是 2026-09-24 加的那一档：加法混合会开始糊成一片白，拿糊换显眼。",
   limits: PULSE_LIMITS.rainBrightness, fmt: (v) => v.toFixed(2),
   get: () => PULSE_SETTINGS.rainBrightness,
   set: (v) => setPulseSetting("rainBrightness", v),
+}));
+uiPaints.push(sliderRow(document.getElementById("rainRows"), {
+  title: "雨的颗数", hint: "屏上画多少颗字。800 = 素材原样，1600 = 现在默认（更密那一刀），3200 封顶。",
+  limits: PULSE_LIMITS.rainCount, fmt: (v) => v.toFixed(0) + " 颗",
+  get: () => PULSE_SETTINGS.rainCount,
+  set: (v) => setPulseSetting("rainCount", v),
 }));
 // 涟漪 / 雨两颗独立开关：跟脉冲开关同一种按钮长相，但各管各的
 uiPaints.push(bindOnOff("rippleOn", "涟漪", () => PULSE_SETTINGS.rippleEnabled, setRippleEnabled));
@@ -419,6 +425,7 @@ function settingsToFile() {
       dotSizeMm: PULSE_SETTINGS.dotSizeMm,
       rainEnabled: PULSE_SETTINGS.rainEnabled,
       rainBrightness: PULSE_SETTINGS.rainBrightness,
+      rainCount: PULSE_SETTINGS.rainCount,
     }, gradeValues()),   // 六档波速/节拍：键名与夹好的值都由 model 那张 GRADE_KEYS 表给，这里不重抄
     monitor: { intervalMs: MONITOR_SETTINGS.intervalMs, probeEveryMs: MONITOR_SETTINGS.probeEveryMs },
   };
@@ -447,7 +454,8 @@ function applySettings(o) {
   if (g && typeof g === "object") {
     if (typeof g.rippleEnabled === "boolean" && g.rippleEnabled !== PULSE_SETTINGS.rippleEnabled) { setRippleEnabled(g.rippleEnabled, true); changed = true; }
     if (typeof g.rainEnabled === "boolean" && g.rainEnabled !== PULSE_SETTINGS.rainEnabled) { setRainEnabled(g.rainEnabled, true); changed = true; }
-    for (const k of ["rippleHeight", "rippleThickness", "rippleBrightness", "dotSeg", "dotSizeMm", "rainBrightness"]) {
+    for (const k of ["rippleHeight", "rippleThickness", "rippleBrightness", "dotSeg", "dotSizeMm",
+      "rainBrightness", "rainCount"]) {
       const lim = PULSE_LIMITS[k], v = Number(g[k]);
       if (!Number.isFinite(v)) continue;
       const nv = clampv(v, lim[0], lim[1]);
