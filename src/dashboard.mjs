@@ -178,17 +178,23 @@ const RES = {
       // 没抓到帧的（模拟那几台）照旧按"每三个核里两个 E"分摊 —— 模拟卡的 kind 是按**整机核数**分的，
       // 而墙上只摆前 6 张，直接数 kind 会得出 "6P + 0E" 这种一看就不对的串。
       if (!c) return pCountOf(its.length) + "P + " + (its.length - pCountOf(its.length)) + "E · " + its.length + " 核";
+      // 主频这一格要回来（09-24 他问"原来显示核心数量和主频的地方变成线程了"）：
+      // 换成一逻辑处理器一张卡之后，抬头只剩核数/线程/型号，那一格没人管了 —— 数还在帧里（maxMhz / curMhz），
+      // 只是没人念。两个数含义不同，所以分开写：curMhz 是 linux 侧 /proc/cpuinfo 的**此刻**跑多少，
+      // maxMhz 是 Windows 侧 WMI 的**标称**主频（不是睿频上限，别写成"最高"）。两个都拿不到就整段不显示。
+      const ghz = (v) => (v >= 1000 ? (v / 1000).toFixed(2) + " GHz" : v + " MHz");
+      const hz = c.curMhz ? " · 实时 " + ghz(c.curMhz) : c.maxMhz ? " · 主频 " + ghz(c.maxMhz) : "";
       const model = shortName(c.model);
       const p = its.filter((x) => x.kind === "P").length;
       const e = its.filter((x) => x.kind === "E").length;
       if (p + e > 0) {
         const phys = c.phys || p + e;
-        return p + "P + " + e + "E · " + phys + " 核" + (model ? " · " + model : "");
+        return p + "P + " + e + "E · " + phys + " 核" + hz + (model ? " · " + model : "");
       }
       // 实测的卡是**一个逻辑处理器一张**，所以抬头必须说线程，不能写成 "12 核" 让他以为是 12 个物理核
       const phys = c.phys || 0;
       const logi = c.logical || its.length;
-      return (phys ? phys + " 核 · " : "") + logi + " 线程" + (model ? " · " + model : "");
+      return (phys ? phys + " 核 · " : "") + logi + " 线程" + hz + (model ? " · " + model : "");
     },
     make: (i, hw) => {
       const isP = i < pCountOf(hw.cores);
