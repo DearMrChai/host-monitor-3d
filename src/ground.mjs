@@ -730,7 +730,10 @@ export function pulseCount() { return livePulses.length + liveUp.length; }
 // 地面与雨的读数：开关、活涟漪数、点阵规模、雨的不透明度（后台标签页 rAF 不跑时用 groundRun 手推）
 export function groundStats() {
   return { 涟漪开关: PULSE_SETTINGS.rippleEnabled, 雨开关: PULSE_SETTINGS.rainEnabled,
-    活涟漪: rippleTerrain.ripples.length, 顶点: rippleTerrain.count, 地面平: rippleTerrain.flat,
+    活涟漪: rippleTerrain.ripples.length,
+    // 每一圈自带起圈那一刻的波速 —— 这一格是把"三档环速不同"从读码变成读数的唯一入口：
+    // 屏上看不出错（一圈 8 一圈 30 都是绿的环，只有荡得快慢），而它是从 STATES 现取的。
+    环波速: rippleTerrain.ripples.map((r) => r.speed), 顶点: rippleTerrain.count, 地面平: rippleTerrain.flat,
     段数: rippleTerrain.seg, 点距mm: Math.round(24000 / rippleTerrain.seg),
     雨不透明: +binaryRain.rainMat.opacity.toFixed(3), 光斑不透明: +binaryRain.bokehMat.opacity.toFixed(3),
     点径mm: rippleTerrain.material.size, 放大: rippleTerrain.mesh.scale.x,
