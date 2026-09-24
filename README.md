@@ -69,6 +69,7 @@ chassis-geometry.mjs   机箱与网络设备几何（9 个模型函数 + screenC
 desk-geometry.mjs      外设与桌面组合（复用上面那份，没有第二份几何），可移植层
 src/three.mjs          全场景唯一的 THREE 来源（双 CDN 兜底在这里，两页与两份几何都 import 它）
 src/model.mjs          状态层：档位表 / 设备清单 / 分区 / 三档分级 / 可调参数表，整页只有一份（T5-2 从页面里搬出来的）
+src/format.mjs         读数换算层：数 → 屏上那行字（fmt / 色阶 / GB / 型号短名 / 厂商…），零依赖，三处共用（T5-4 刀1）
 monitor-wall.html      监控墙原型（几何、three、状态都是真 import，所以必须经 serve.mjs 打开）
 silhouette-shelf.html  剪影架原型（嵌内联副本，可 file:// 双击）
 serve.mjs              本地服务：清单 / 分区 / 设置 三个文件的读写 + SSH 探一帧（Windows 走 PowerShell，Linux 走 sh）
@@ -82,7 +83,7 @@ docs/                  尺寸与实测、移植指引、本地服务与数据源
 剪影架那一页嵌的是内联副本，不重灌就会跟源走散，② 就是抓这件事的（逐件世界 AABB 比对，9 个单机件必须全 0 差异）；
 ① 那一节现在还会在 node 里把 `src/model.mjs` 真 import 一遍，设备/分区/档位数不对就当场报错。
 
-## 五条不能破的口径
+## 六条不能破的口径
 
 1. **几何是纯函数**：顶层不碰 `document` / `window` / renderer，node 能直接 import；
    姿态由调用方的 `rotation` 决定，不写死在几何里。
@@ -96,6 +97,9 @@ docs/                  尺寸与实测、移植指引、本地服务与数据源
    整份换绑（`devices = 新数组`）必须走导出的 `setDevices()`——导入方那侧的绑定是只读的，
    直接写会在运行时抛 TypeError；改对象属性（`PULSE_SETTINGS.dotSeg = 320`）不用，照常写。
    `ZONES` 刻意长驻同一个数组（`length = 0` 再 push），就是为了让各层抓着的引用不散。
+6. **数 → 字只有一份口径，且在 `src/format.mjs`**：性能看板、提示浮层、设置列表三处读到的都是这一层。
+   这层零依赖（不碰 DOM / THREE / 状态），所以在 node 里能直接 import 来量；页面里另写一份 `toFixed`
+   就是"同一个数在两处显示成两个样"的开始。
 
 ## ⚠ 敏感文件，永远不进 git
 
