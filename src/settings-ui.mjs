@@ -9,7 +9,7 @@
 import { THREE } from "./three.mjs";
 import { TIERS, tierOf, mkDev, seq, devices, setDevices, ZONES, ZONE_FIELD, ZONE_AISLE, ZONE_PITCH,
   ZONE_KEY_RE, ZONE_MAX, zoneKeyOf, zoneOf, OS_LABEL, MONITOR_SETTINGS, MON_LIMITS, MS_KEY,
-  PULSE_SETTINGS, PULSE_LIMITS, PS_KEY, liveOf, zoneOffOf,
+  PULSE_SETTINGS, PULSE_LIMITS, PS_KEY, liveOf, ACCESS, zoneOffOf,
   STATES, GRADE_KEYS, gradeBounds, setGrade, gradeValues } from "./model.mjs";
 import { fmt, clampv, pctFmt, mmFmt } from "./format.mjs";
 import { el, mini, fieldRow, textField, sliderRow, bindOnOff } from "./ui.mjs";
@@ -36,6 +36,25 @@ const mask = document.getElementById("mask");
 const rowsBox = document.getElementById("rows");
 const countEl = document.getElementById("dcount");
 
+// ---------- 这一台是主人还是观众（2026-09-24 需求 #2 那一刀：组内都能看，只有配在程序里的能改）----------
+// 页面只在开机问一次 /api/state，拿到 mode 就照着摆：观众那一份连设置齿轮都不给。
+// 认不出来的那一档（读不到 / file://）按主人处理 —— 这不是"放行"：真正的门在 serve.mjs，
+// 观众那边就算硬把弹窗打开，四个写接口与 /api/probe 也会各自回 403。这里只管要不要给他那个入口。
+const ACCESS_API = "/api/state";
+// 那一格住在 model.mjs 的 ACCESS 里（看板那侧也要读它来挑文案）；这里只是设置层的入口
+export const isViewer = () => ACCESS.viewer;
+export async function loadAccess() {
+  if (location.protocol === "file:") return;
+  try {
+    const r = await fetch(ACCESS_API, { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    ACCESS.viewer = j.mode === "view";
+    // setDialog(false) 无条件走一遍：它是幂等的（就是"关上"），比先读 mask.hidden 再决定省事，
+    // 而且那个属性在别的元素上恰恰不可信（#mask 靠补的那行 CSS 才压得住，见页面 CSS）。
+    if (ACCESS.viewer) { gear.hidden = true; setDialog(false); }
+  } catch { /* 读不到就维持主人态，写接口自己会挡 */ }
+}
 
 
 
@@ -290,7 +309,7 @@ uiPaints.push(sliderRow(document.getElementById("monRows"), {
 // 抓帧间隔 = 那几台真机"多久被敲一次"。这一格才是"看板上的数会不会自己动"的开关：
 // 重画节拍再快，帧不更新也只是把同一份数重念一遍（他 2026-09-24 报的"数值纹丝不动"就是这个）。
 uiPaints.push(sliderRow(document.getElementById("monRows"), {
-  title: "抓帧间隔", hint: "隔多久把填了地址的机器各抓一帧（从上一轮抓完开始计时）。一轮实测 20~35 s，别调到 3 s 那档连轴转。",
+  title: "抓帧间隔", hint: "隔多久把填了地址的机器各抓一帧（从上一轮抓完开始计时）。2026-09-24 起这一轮由跑服务的那台机器自己转，所有页面都关掉也照抓；改这一格从下一轮起生效。一轮实测 20~35 s，别调到 3 s 那档连轴转。",
   limits: MON_LIMITS.probeEveryMs,
   fmt: (v) => "每 " + (v / 1000).toFixed(0) + " 秒 1 轮",
   get: () => MONITOR_SETTINGS.probeEveryMs,
@@ -462,7 +481,9 @@ function applySettings(o) {
   return changed;
 }
 async function saveSettings() {
-  if (setMode !== "文件") return;
+  // "是观众就别写"这一条是必需的：观众的浏览器 GET /api/settings 照样通（设置里不含口令），
+  // 所以 setMode 会是"文件"，一旦值被钳过就会走回写 —— 那台机器不该往主人那份 json 上写东西。
+  if (ACCESS.viewer || setMode !== "文件") return;
   setSaving = true;
   try {
     const r = await fetch(SET_API, { method: "PUT", headers: { "content-type": "application/json" },
@@ -480,7 +501,7 @@ async function saveSettings() {
 }
 export function touchSettings() {
   // 没接上文件就没得写；这条也顺带挡住启动期（那会儿 setMode 还是"内存"）
-  if (setMode !== "文件") return;
+  if (ACCESS.viewer || setMode !== "文件") return;
   clearTimeout(setTimer);
   setTimer = setTimeout(() => { setTimer = 0; saveSettings(); }, 400);
 }
@@ -524,6 +545,7 @@ async function pollSettings() {
 // 清单存 name/tier/power/os/host/user/pass —— pass 明文落盘是你 2026-09-23 同意的，
 // 代价是这个文件成了敏感文件：别拷进仓库、别进分享包。
 const CFG_API = "/api/devices";
+const HOSTS_API = "/api/hosts";   // 同一份清单的观众版：没有 user / pass，多一个服务端算好的 live
 const CFG_FILE = "devices.json";
 const cfgLine = document.getElementById("cfgline");
 let cfgMode = "内存";
@@ -542,6 +564,7 @@ function toFileList() {
     host: d.host, user: d.user, pass: d.pass }));
 }
 async function saveNow() {
+  if (ACCESS.viewer) return;   // 观众的清单来自 /api/hosts（不含 user/pass）；拿它反写 devices.json 会把凭据整格清空
   try {
     const r = await fetch(CFG_API, { method: "PUT", headers: { "content-type": "application/json" },
       body: JSON.stringify({ list: toFileList() }) });
@@ -569,7 +592,8 @@ export async function loadDevices() {
     return;
   }
   try {
-    const r = await fetch(CFG_API, { cache: "no-store" });
+    // 观众读的是剥掉 user/pass 的那一份（/api/devices 现在只有主人能读）
+    const r = await fetch(ACCESS.viewer ? HOSTS_API : CFG_API, { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const j = await r.json();
     if (!Array.isArray(j.list) || !j.list.length) throw new Error("清单为空");
@@ -772,11 +796,14 @@ export function dialogState() { return getComputedStyle(mask).display; }
 // 首屏启动：读三份文件、按文件里的值重建一次、之后才允许写盘（booted 之前任何一次 touch* 都不落盘，
 // 免得"刚打开页面"被当成"用户改了设置"把默认值刷进那三份权威档）。
 // 顺序是有讲究的。
+// 身份（主人 / 观众）先问：它决定下面读清单走哪个端点（/api/devices 带口令、/api/hosts 不带），
+// 也决定浏览器这一头的几个写闸门要不要先合上。
 // 分区必须先于设备读：设备清单里的 zone 要对着"当前这套分区"验，反过来就全被当成手动钉的又不存在的区。
 // 设置要在 sync() 之前读：文件里的值得落在首屏上，不然开局那几秒屏上是 localStorage 的旧值。
 // 调用点仍然在页面所有声明之后 —— sync 会走到 fitOverview，
 // 那要读 OVERVIEW / HOME，放它们前面就是 TDZ 崩页（这一类错已经踩过 liveOf 一次）。
 export async function bootFromFiles() {
+  await loadAccess();
   await loadZones();
   await loadDevices();
   await loadSettings();

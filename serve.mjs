@@ -1,8 +1,9 @@
 // 原型本地服务：把设备清单存成同目录的 devices.json、分区表存成 zones.json、设置存成 settings.json，
 // 页面上的编辑实时写回这三个文件。零依赖，node 22 直接跑。
 //   node serve.mjs            → http://127.0.0.1:8123/monitor-wall.html
-//   HM_BIND=0.0.0.0 HM_ALLOW=10.226.127.14 node serve.mjs
-//        → 也从别的机器能开（那台自己没屏幕时用），并且只认 HM_ALLOW 里那几个来源
+//   HM_BIND=0.0.0.0 HM_OWNER=10.226.127.14 node serve.mjs
+//        → 同网段 / ZeroTier 组内谁都能打开这块墙（只读），只有 HM_OWNER 里那几台能进设置、改清单、点"抓一帧"
+//   HM_ALLOW=10.226.127.14,10.226.127.52 → 想连"看"也收到名单上时再加（不给 = 谁连得上谁就能看）
 // 为什么要有它：file:// 下浏览器不能写盘，"编辑同步修改配置文件"必须走一次本地 HTTP。
 import { createServer } from "node:http";
 import { readFile, writeFile, rename, appendFile } from "node:fs/promises";
@@ -20,11 +21,18 @@ const PORT = Number(process.env.PORT || 8123);
 // 那几台机器上 —— 这个服务不做鉴权，能连上的人就等于能读走整份清单、也能借它往任意主机打 SSH。
 const BIND = process.env.HM_BIND || "127.0.0.1";
 const LOOPBACK = BIND === "127.0.0.1" || BIND === "localhost" || BIND === "::1";
-// 允许从哪些机器连（逗号分隔的 IP，环回永远放行；不给＝不限制）。
+// 两扇门（2026-09-24 用户裁的"乙"：组内都能看，只有配在程序里的那几台能改）：
+//   看 = 打开墙 + 读脱敏清单 /api/hosts + 读帧缓存 /api/frames；闸门是 HM_ALLOW（不给 = 谁连得上谁都能看）。
+//   改 = 写三个 json + 那份带明文口令的 /api/devices + 借道 SSH（POST /api/probe）；闸门是 HM_OWNER。
 // 为什么这道检查必须在服务里做、不能只靠防火墙：138 那台的 Windows 防火墙三个 profile 全是关的
-// （实测 Enabled=False），规则加上去也不会挡谁。而这个服务不做鉴权 —— 能连上的人就能读走整份
-// 设备清单（含明文口令），也能借 /api/probe 往任意主机打 SSH，所以来源得自己认。
+// （实测 Enabled=False），规则加上去也不会挡谁。
+// ⚠ 口令这一维从来不是"来源对不对"能保住的东西：整份清单（含明文 pass）原本谁连得上谁就读得走，
+//   所以放开"看"之前先把那条口子换成 /api/hosts（剥掉 user/pass，只留一个派生的 live）。
 const ALLOW = (process.env.HM_ALLOW || "").split(",").map((s) => s.trim()).filter(Boolean);
+// HM_OWNER 没给时退回吃 HM_ALLOW（老那行 `HM_BIND=0.0.0.0 HM_ALLOW=10.226.14` 的语义 = 那台既是观众也是主人，
+// 升级这天不会出现"谁能看却没人能改"把他锁在自己墙外面）。两个都没给 = 只有环回能改（开发机就是这一档）。
+const OWNER = (process.env.HM_OWNER !== undefined ? process.env.HM_OWNER : process.env.HM_ALLOW || "")
+  .split(",").map((s) => s.trim()).filter(Boolean);
 // 抓机器除了口令还可以认一把私钥：HM_SSH_KEY 指一个私钥文件路径。为什么需要它：14（笔记本）那台
 // 账号始终无密码，而它的 sshd 又写着 PasswordAuthentication no —— 只有口令这一条路时，连"试"都试不到，
 // 服务端直接回 All configured authentication methods failed。
@@ -36,10 +44,21 @@ if (SSH_KEY_FILE) {
   try { SSH_KEY = readFileSync(SSH_KEY_FILE, "utf8"); SSH_KEY_NOTE = "已载入私钥 " + SSH_KEY_FILE; }
   catch (e) { SSH_KEY_NOTE = "⚠ HM_SSH_KEY 指的私钥读不到：" + SSH_KEY_FILE + "（" + (e.code || e.message) + "）⇒ 这台仍只能试口令"; }
 }
+// 两扇门都按 TCP 那一端的地址认（不是 X-Forwarded-For：本站没有反代，信头里的来源可以瞎写）。
+function peerOf(req) {
+  return String(req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+}
+const loopOf = (ip) => ip === "127.0.0.1" || ip === "::1";
+// 能不能连上这块墙（看）。名单没给 = 放开：138 现在就是这么摆给组内朋友看的。
 function fromAllowed(req) {
   if (!ALLOW.length) return true;
-  const ip = String(req.socket.remoteAddress || "").replace(/^::ffff:/, "");
-  return ip === "127.0.0.1" || ip === "::1" || ALLOW.includes(ip);
+  const ip = peerOf(req);
+  return loopOf(ip) || ALLOW.includes(ip);
+}
+// 能不能改（含"借这台机器去敲别人的 SSH"）。环回永远是主人：本机 node serve.mjs 什么名单都不给也得能干活。
+function fromOwner(req) {
+  const ip = peerOf(req);
+  return loopOf(ip) || OWNER.includes(ip);
 }
 const MAX_BYTES = 64 * 1024;
 const TIERS = new Set(["laptop", "matx", "atx", "eatx", "itx", "nas", "switch", "router"]);
@@ -87,6 +106,19 @@ function normalize(list) {
   }
   return out.length ? out : null;
 }
+
+// 派生一格 live：地址 + 用户名都填了 = 这台会去抓真数（页面原来就是拿这两个字段自己判的，
+// 现在改成服务端算好给它 —— 因为"看"那扇门放开之后，观众拿不到 user 这一格，没法自己判）。
+const withLive = (list) => list.map((d) => Object.assign({}, d, { live: !!(d.host && d.user) }));
+// 脱敏那一步：墙上摆一台机器只需要"叫什么 / 哪一档 / 哪个区 / 开没开机 / 有没有真数可取 / 什么系统"。
+// 用户名与口令就是这两个字段把 /api/devices 变成了敏感端点，所以给观众的那份整格去掉（不是置空串：
+// 空串还在，页面里那句 if (d.user) 就会去猜"这台填了但没填全"）。
+const SCRUB = ["user", "pass"];
+const scrub = (list) => withLive(list).map((d) => {
+  const o = Object.assign({}, d);
+  for (const k of SCRUB) delete o[k];
+  return o;
+});
 
 async function load() {
   if (!existsSync(FILE)) {
@@ -151,7 +183,11 @@ const SET_SHAPE = {
     // 值搬进 STATES 的 speed / interval，老文件里残留的 rippleSpeed 这一认不到，就被顺手改写掉（不猜它想配谁）。
     rippleSpeedIdle: "num", rippleSpeedActive: "num", rippleSpeedAlert: "num",
     rippleIntervalIdle: "num", rippleIntervalActive: "num", rippleIntervalAlert: "num" },
-  monitor: { intervalMs: "num" },
+  // probeEveryMs 这一格必须在这儿列着，否则 normalizeSettings 会在每次 PUT 时把它悄悄丢掉：
+  // 页面写"抓帧间隔"→ 文件里只剩 intervalMs → 服务端那一轮永远按默认 15 s 歇。
+  // 搬抓帧进服务端之前这一格只活在浏览器内存里（页面自己排下一轮），所以掉了我也不知道掉了；
+  // 现在它是服务端唯一的节拍来源，掉一次就是"屏上那格滑杆从此不灵"。2026-09-24 舞台实测抓到（见 docs）。
+  monitor: { intervalMs: "num", probeEveryMs: "num" },
 };
 // 文件第一行那句人话。放在服务端而不是页面里：整份删掉重建时也得有人写这一句，
 // 否则"删了再打开"生出来的就是一份没有说明的裸 JSON。（页面只管值，不管文件长什么样。）
@@ -429,20 +465,110 @@ function probe({ host, user, pass, os }) {
   });
 }
 
+// ---------- 抓帧这一轮：由本服务自己转（2026-09-24 夜从页面搬进来）----------
+// 为什么必须搬：原来那圈 setTimeout 长在页面里，于是"谁的浏览器开着谁才喂这块墙"。放开"看"之后
+// 观众那台拿不到凭据（口令本来就不该出这台风），也就发不出探针 —— 朋友打开只会看到一整片"—"。
+// 搬进服务端之后：口令一次都不出这台机器，观众开页就有数，他那台笔记本的页关掉也不影响别人看。
+// 一轮的规矩跟搬之前页面里那条一模一样：该抓的机器按顺序各抓一帧、每台之间歇 1.2 s，
+// 抓完歇 settings.json 里那一格 probeEveryMs 再来下一轮（一轮本身实测 20~45 s，所以不能拿固定 setInterval 压着跑）。
+const frames = new Map();   // host -> { ok, frame, error, at }
+const ROUND_GAP_MS = 1200;      // 同一轮里两台之间，别同一瞬间捅四台
+const EVERY_DEFAULT = 15000;
+// 范围那张真表在页面的 MON_LIMITS；服务端这一夹只挡一件事：手改文件写出个"10 毫秒"把这台机器变成 SSH 轰炸机。
+const EVERY_FLOOR = 3000, EVERY_CEIL = 600000;
+let roundTimer = 0, roundRunning = false, roundNo = 0;
+let roundStartedAt = 0, roundFinishedAt = 0, roundEveryMs = EVERY_DEFAULT;
+
+function noteFrame(host, r) {
+  frames.set(host, { ok: !!r.ok, frame: r.frame || null, error: r.ok ? "" : String(r.error || "").slice(0, 200),
+    at: new Date().toISOString() });
+}
+// 每一轮跑完才回文件里读这一格：他在设置里改"抓帧间隔"，下一轮就跟上（不必重启服务）。
+async function readEveryMs() {
+  const { settings } = await loadSettings();
+  const v = Number(settings && settings.monitor && settings.monitor.probeEveryMs);
+  return Number.isFinite(v) ? Math.min(EVERY_CEIL, Math.max(EVERY_FLOOR, Math.round(v))) : EVERY_DEFAULT;
+}
+function roundInfo() {
+  return { no: roundNo, running: roundRunning, startedAt: roundStartedAt, finishedAt: roundFinishedAt,
+    everyMs: roundEveryMs, hosts: frames.size,
+    nextInMs: roundRunning ? null : Math.max(0, roundEveryMs - (Date.now() - roundFinishedAt)) };
+}
+async function runRound() {
+  if (roundRunning) return;
+  roundRunning = true; roundNo++; roundStartedAt = Date.now();
+  try {
+    const { list } = await load();
+    for (const d of list) {
+      // 藏起来的、以及没填全（地址 + 用户名）的不抓。
+      // "落在已关闭分区里"这一维**不在服务端复算**：那份判据长在页面（model.mjs 拿 zones.json 的 off 对着查），
+      // 这里再抄一份就是两个真源、早晚走散；多抓一台关掉的分区里的机器只是每轮一次 SSH，
+      // 而放出来那一刻它已经有现成的数，不用等下一轮。
+      if (d.hidden || !d.host || !d.user) continue;
+      let r;
+      try { r = await probe({ host: d.host, user: d.user, pass: d.pass, os: d.os }); }
+      catch (e) { r = { ok: false, error: "服务内部错误：" + String((e && e.message) || e) }; }
+      noteFrame(d.host, r);
+      logProbe(d.host, r.ok, r.ok ? "" : r.error);
+      await new Promise((res) => setTimeout(res, ROUND_GAP_MS));
+    }
+  } finally {
+    roundRunning = false;
+    roundFinishedAt = Date.now();
+    roundEveryMs = await readEveryMs();
+    roundTimer = setTimeout(runRound, roundEveryMs);
+  }
+}
+
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".mjs": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8",
   ".css": "text/css; charset=utf-8" };
 
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
-  // 来源这道门在最前面：连页面带接口一起挡，不给自己留"页面能开、接口不给"那种半开状态
+  // 第一道门：能不能连这块墙（看）。名单没给 = 放开，连页面带接口一起放行。
   if (!fromAllowed(req)) {
-    return send(res, 403, "这台只对指定来源开放（serve.mjs 的 HM_ALLOW）", "text/plain; charset=utf-8");
+    return send(res, 403, "这块墙不对你开放（serve.mjs 的 HM_ALLOW）", "text/plain; charset=utf-8");
   }
-  // 所有 /api/* 都先过同源这道门：读的那几个口子回的是含口令的清单，写的那几个口子能改清单和设置，
-  // 而跨站请求可以不带预检地打过来（text/plain 的"简单请求"照样被下面 JSON.parse 当 JSON 收下）。
+  // 所有 /api/* 都先过同源这道门：它挡的是"别的网站借你打开着的浏览器来打这个端口"，
+  // 跟来源 IP 是两回事（同事在自己机器上看墙，IP 过了第一道门，但 Origin 仍然是这台 138 —— 放行是对的）。
   if (url.pathname.startsWith("/api/") && !sameOrigin(req)) {
     return send(res, 403, JSON.stringify({ ok: false, error: "来源不是本机" }));
+  }
+  // 第二道门：能不能改。下面这一张表就是"改"的全部口径 ——
+  // 写三个 json、借这台机器敲别人的 SSH、跑一轮抓取，四种都算改；
+  // 而 /api/devices 的 GET 虽然名义上是"读"，读的是那份**含明文口令**的清单，所以它也在这张表里。
+  // 观众要读清单走 /api/hosts（剥掉 user/pass 的那份），要读数走 /api/frames。
+  const WRITE_API = [["POST", "/api/probe"], ["POST", "/api/round"], ["GET", "/api/devices"],
+    ["PUT", "/api/devices"], ["PUT", "/api/zones"], ["PUT", "/api/settings"]];
+  if (WRITE_API.some(([m, p]) => m === req.method && p === url.pathname) && !fromOwner(req)) {
+    return send(res, 403, JSON.stringify({ ok: false,
+      error: "这一项只有看板主人能做（这一台的地址不在 serve.mjs 的 HM_OWNER 里）" }));
+  }
+  // 我是主人还是观众：页面就问这一格。设置齿轮、编辑、双击补抓、"抓一帧"全凭它摆不摆出来。
+  if (url.pathname === "/api/state") {
+    return send(res, 200, JSON.stringify({ ok: true, mode: fromOwner(req) ? "owner" : "view",
+      view: ALLOW.length ? ALLOW : "谁连得上谁都能看", owner: OWNER }));
+  }
+  // 给观众的清单：与 /api/devices 同一份文件，只是剥掉 user / pass 两格、补上服务端算好的 live。
+  if (url.pathname === "/api/hosts") {
+    const { source, list } = await load();
+    return send(res, 200, JSON.stringify({ list: scrub(list), source }));
+  }
+  // 帧缓存：服务端每抓完一台就写这里，页面每 2 秒来取一趟（自己一发 SSH 都不发）。
+  // 响应里带上 rounds 那一格，是为了让"这块墙多久抓一轮、上一轮什么时候跑完"在浏览器里可读，
+  // 不用去问服务端日志。
+  if (url.pathname === "/api/frames") {
+    const out = {};
+    for (const [host, r] of frames) out[host] = r;
+    return send(res, 200, JSON.stringify({ ok: true, rounds: roundInfo(), frames: out }));
+  }
+  // 手动催一轮（主人的"抓一帧"按钮与自测用）：把排队的那只定时器掐掉、立刻开跑。
+  // 只回 roundInfo 不回数据 —— 数还是从 /api/frames 拿，两条路不必各写一份帧。
+  if (url.pathname === "/api/round") {
+    clearTimeout(roundTimer); roundTimer = 0;
+    runRound();   // 不 await：一轮 20~45 秒，HTTP 这一头不该挂着
+    return send(res, 200, JSON.stringify({ ok: true, rounds: roundInfo() }));
   }
   if (url.pathname === "/api/probe") {
     if (req.method !== "POST") return send(res, 405, JSON.stringify({ ok: false, error: "只支持 POST" }));
@@ -458,6 +584,9 @@ createServer(async (req, res) => {
         pass: String(body.pass || ""), os: String(body.os || "") }); }
       catch (e) { r = { ok: false, error: "服务内部错误：" + String((e && e.message) || e) }; }
       logProbe(String(body.host || "?"), r.ok, r.ok ? "" : r.error);
+      // 手动抓的那一帧也进缓存：否则"连通性测试"抓出来的数只活在弹窗里，两秒后页面从 /api/frames
+      // 拉回来的还是旧帧，屏幕上看着像"测过了但墙上没动"。
+      if (body.host) noteFrame(String(body.host), r);
       // 抓不到也回 200：HTTP 这一层是成功的（请求到了、连也试过了），成败在 ok 那一格上。
       // 用 502 的话浏览器控制台会替每一台抓不到的机器记一条红色错误 —— 页面打开时本来就对
       // 每台填了地址的机器各抓一帧，看板机一开机就是几行红的，看着像坏了。
@@ -468,7 +597,8 @@ createServer(async (req, res) => {
   if (url.pathname === "/api/devices") {
     if (req.method === "GET") {
       const { source, list } = await load();
-      return send(res, 200, JSON.stringify({ list, source }));
+      // withLive 而不是原样吐：让主人那份和观众那份（/api/hosts）字段形状一致，页面只有一条判据
+      return send(res, 200, JSON.stringify({ list: withLive(list), source }));
     }
     if (req.method === "PUT") {
       let raw = "";
@@ -546,15 +676,23 @@ createServer(async (req, res) => {
   } catch {
     send(res, 404, "not found", "text/plain");
   }
-}).listen(PORT, BIND, () => {
+}).listen(PORT, BIND, async () => {
   console.log(`原型服务已起：http://${LOOPBACK ? "127.0.0.1" : BIND}:${PORT}/monitor-wall.html` +
     (LOOPBACK ? "" : `（也从 http://<本机 IP>:${PORT}/monitor-wall.html 能开）`));
   console.log(`设备清单文件：${FILE}（页面编辑会写回这里${LOOPBACK ? "；只监听 127.0.0.1" : ""}）`);
   console.log(`分区文件：${ZFILE}`);
   console.log(`设置文件：${SFILE}（改它即改看板，页面每 5 秒读一次；页面里改也写回它）`);
-  console.log(LOOPBACK ? "来源：只认环回（别的机器连不上）"
-    : ALLOW.length ? `来源：只放 ${ALLOW.join(" / ")}（外加环回）`
-    : "⚠ 来源：不限制 —— 绑在非环回地址上又没给 HM_ALLOW，同网段谁能连上谁就能读走整份设备清单（含口令）");
+  // 两扇门各报一遍：放开"看"之后，光看"来源"那一行会以为谁都能改这块墙
+  console.log("看（HM_ALLOW）：" + (ALLOW.length ? `只放 ${ALLOW.join(" / ")}（外加环回）`
+    : LOOPBACK ? "只认环回（别的机器连不上）"
+    : "⚠ 不限来源 —— 同网段谁能连上谁都能打开这块墙。它读的清单已剥掉用户名与口令（/api/hosts），"
+      + "抓帧由本服务端自己转，所以放开「看」的代价是「陌生机器能看见那几台的负载与型号」，不再是「能读走整份清单」"));
+  console.log("改（HM_OWNER）：" + (OWNER.length ? `只认 ${OWNER.join(" / ")}（外加环回）`
+    : "只有环回 —— 别的机器只能看，改不动；本机要改就在 127.0.0.1 那个地址开页面")
+    + (process.env.HM_OWNER === undefined && ALLOW.length ? "（没给 HM_OWNER，暂按 HM_ALLOW 那份名单当主人）" : ""));
   // 有没有私钥直接决定"没填口令的那几台"抓不抓得到，所以启动就得看得见这一格
   console.log("抓机器用的私钥：" + SSH_KEY_NOTE);
+  // 第一轮不等定时器：服务一起来就把机器挨个抓一遍，谁先打开墙谁就先有数
+  console.log("抓帧：由本服务端自己转（页面只读缓存），每轮歇 " + await readEveryMs() + " ms");
+  runRound();
 });

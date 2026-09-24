@@ -3,7 +3,7 @@
 // 这层不碰 SSH、不碰浮层、不碰分区摆放 —— 那些留在页面，是"这一页"的接线不是"这块板"的逻辑。
 import { el, sparkSvg, mini } from "./ui.mjs";
 import { clampv, usageColor, tempColor, mean, fmtSpeed, hhmm, gbOfBytes, mbOfBytes, gbOfMb, avgOf, gbTxt, memPct, memFreeGb, diskName, volName, shortName, vendorOf } from "./format.mjs";
-import { liveOf, tierOf, MONITOR_SETTINGS, MON_LIMITS, MS_KEY } from "./model.mjs";
+import { liveOf, tierOf, MONITOR_SETTINGS, MON_LIMITS, MS_KEY, ACCESS } from "./model.mjs";
 
 const srcTag = (d) => (!liveOf(d) ? "模拟" : d.frame ? "实测" : d.probeErr ? "抓不到" : "待抓");
 
@@ -841,8 +841,13 @@ function buildPanel(d) {
     perfBody.append(el("div", "pnote", !liveOf(d)
       ? "这台没填地址：只摆位置，不抓数"
       : d.probeErr ? "这台抓不到：" + d.probeErr
-        : "还没抓到这台的帧：双击这一下已经当场去抓了，那一帧还没回来。"
-          + "之后每 " + Math.round(MONITOR_SETTINGS.probeEveryMs / 1000) + " 秒自动抓一轮（设置 → 采集频率）"));
+        : ACCESS.viewer
+          // 观众双击不会去抓机器（/api/probe 只认主人），所以这句不能写"你这一下已经去抓了"——那是假话。
+          // 他看到的全部真相是：抓帧由看板那台自己排，这一轮排到它就有数。
+          ? "还没抓到这台的帧：看板那台机器每 " + Math.round(MONITOR_SETTINGS.probeEveryMs / 1000)
+            + " 秒自己抓一轮，排到它就上榜。"
+          : "还没抓到这台的帧：双击这一下已经当场去抓了，那一帧还没回来。"
+            + "之后每 " + Math.round(MONITOR_SETTINGS.probeEveryMs / 1000) + " 秒自动抓一轮（设置 → 采集频率）"));
   }
 }
 

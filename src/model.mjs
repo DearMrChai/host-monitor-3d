@@ -240,7 +240,16 @@ function pulseStore() { return JSON.stringify(Object.assign({}, PULSE_SETTINGS, 
 // 配置文件里的每一行 → 场景里的设备对象：档位不认识退到 mATX，分区名不在表里就按档位自动落区。
 // 原来这段写在 loadDevices 里，整份换绑走不了导入方，所以搬进来。
 // 这台填没填地址 = 取不取真数。fleet 摆它、看板读它、探针问它，三处同一个口径，所以放状态这层。
-export const liveOf = (d) => !!(d.host && d.user);
+// 判据现在是"服务端算好的那一格"（下面 setDevices 里落）：放开"看"那扇门之后，观众拿到的清单里
+// 根本没有 user 这一格（/api/hosts 把它剥了），页面再自己 host && user 就会把每台真机都判成模拟机 ——
+// 症状是朋友打开墙，四台全是一片"—"。所以 live 由 serve.mjs 算，页面只读结果。
+export const liveOf = (d) => d.live === true;
+
+// 这一台是主人还是观众：真源在 serve.mjs（看来源地址在不在 HM_OWNER 里），页面开机问一次 /api/state。
+// 放状态层而不是设置层：看板那一侧的提示文案也要跟着身份变（观众双击不会去抓机器，
+// 而"你这一下已经当场去抓了"那句话对他说就是假的），而 dashboard 不能 import settings-ui（那是环形）。
+// ⚠ 只能就地改 ACCESS.viewer，不许整份换绑（见下面那三条"活"状态的规矩）。
+export const ACCESS = { viewer: false };
 
 export function setDevices(list) {
   devices = (list || []).map((it) => Object.assign(
@@ -248,6 +257,9 @@ export function setDevices(list) {
     { power: it.power !== false, hidden: it.hidden === true, os: it.os === "linux" ? "linux" : "win",
       host: typeof it.host === "string" ? it.host : "", user: typeof it.user === "string" ? it.user : "",
       pass: typeof it.pass === "string" ? it.pass : "",
+      // 老规矩兜底：万一哪条路（file:// 手编、未来别的入口）给的是不带 live 的裸清单，
+      // 页面自己按 host && user 现算 —— 那正是搬去服务端之前的判据，结果一样。
+      live: typeof it.live === "boolean" ? it.live : !!(it.host && it.user),
       zone: ZONES.some((z) => z.key === it.zone) ? it.zone : "" }
   ));
 }

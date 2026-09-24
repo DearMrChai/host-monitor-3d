@@ -13,6 +13,9 @@
   #bar .tag { font-size: 11px; opacity: .5; }
   #bar .fill { flex: 1; }
   #gear { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 7px; }
+  /* 观众那一份要把它整个藏掉，而上面这行 display:grid 会盖掉 UA 的 [hidden]{display:none}
+     —— 弹窗那边踩过同一坑（见 #mask[hidden]），所以这一格也必须补，不然 hidden=true 什么都不挡 */
+  #gear[hidden] { display: none; }
   #gear.on { border-color: #4a5563; background: #1c222a; }
   #hud { position: fixed; left: 12px; top: 52px; z-index: 2; max-width: 420px; pointer-events: none; }
   #hud p { margin: 0; opacity: .72; }
@@ -390,7 +393,7 @@ import { initFleet, rebuild, paintZoneColors } from "./src/fleet.mjs";
 import { initGround, updateGround, updatePulses, stepLoads, pulseRun, pulseCount, groundStats, groundRun, rippleKick, loadReport } from "./src/ground.mjs";
 // 设置层：齿轮那个弹窗 + 三份 JSON 的读写与防抖。sync / touch* 这几个名字页面还要用（探针回来要重排、
 // 陈列层要拿 touch 当"清单改过了"的信号），所以是真 import 不是注释。
-import { initSettings, sync, touchSettings, touch, loadDevices, settingsState, dialogState, bootFromFiles } from "./src/settings-ui.mjs";
+import { initSettings, sync, touchSettings, touch, loadDevices, settingsState, dialogState, bootFromFiles, isViewer } from "./src/settings-ui.mjs";
 
 
 const canvas = document.getElementById("c");
@@ -464,48 +467,70 @@ function probeDevice(d) {
   p.finally(() => probeFlights.delete(d.id));
   return p;
 }
-// 抓帧轮询：一轮 = 把"填了地址且墙上看得见"的机器按顺序各抓一帧（每台之间隔 1.2 s，别同一瞬间捅四台），
-// 抓完歇 probeEveryMs 毫秒再来下一轮。开机那一次就是第一轮（所以打开页面先看到的数与轮询完全同源）。
-// 为什么"上一轮抓完才计时"而不是 setInterval：一轮本身实测 20~35 s（四台各 1.8~13 s），
-// 固定间隔会让第二轮压着第一轮跑，两台 SSH 叠在同一台机器上互相拖慢。
-// 成本账（2026-09-24 本机实测，供他调档位）：默认 15 s 一档 ≈ 一轮 25 s + 歇 15 s，
-// 也就是每台平均约 40 s 被敲一次；调到 3 s 那一档就是连轴转，别那么用。
-let probeTimer = 0, roundRunning = false;
-function scheduleProbeRound() {
-  clearTimeout(probeTimer);
-  probeTimer = setTimeout(probeRound, MONITOR_SETTINGS.probeEveryMs);
-}
-async function probeRound() {
-  if (roundRunning) return;
-  roundRunning = true;
+// ---------- 抓帧这一轮现在由服务端自己转，这一页只读它的缓存（2026-09-24 从页面搬走的）----------
+// 为什么必须搬：这一圈定时器原来长在页面里，于是"谁的浏览器开着谁才喂这块墙"。放开"看"那扇门之后，
+// 观众那台连 user 这一格都拿不到（/api/hosts 剥掉了），更发不出探针 —— 朋友打开只会看到一整片"—"。
+// 搬完之后：口令一次都不出 138 那台风，观众开页就有数，任何一台的页关掉都不影响别人看。
+// 取缓存的节拍跟"抓帧间隔"那一格**无关**：服务端每抓完一台就写缓存，页面每 2 秒去看一眼。
+// 那是一份内存里的 Map，比一次 SSH 便宜三个数量级，也让"改了间隔"这件事不需要页面参与。
+const PULL_MS = 2000;
+let pullTimer = 0, lastRounds = null, lastPullErr = "";
+async function pullFrames() {
   try {
+    const r = await fetch("/api/frames", { cache: "no-store" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
+    lastPullErr = "";
+    lastRounds = j.rounds || null;
+    const cache = j.frames || {};
+    let moved = 0;
     for (const d of devices) {
-      // 藏起来的 / 落在关闭分区里的不抓：墙上都看不见它，没必要为它去敲那台机器
-      if (d.hidden || zoneOffOf(d) || !liveOf(d)) continue;
-      await probeDevice(d);
+      const rec = d.host ? cache[d.host] : null;
+      if (!rec) continue;   // 服务端还没抓到过这台（刚加进清单 / 藏起来的那台）：维持"SSH 待抓"
+      if (!rec.ok || !rec.frame) {
+        // 抓不到只记错误，**不把上一帧抹掉**：一次网络抖动就让那块面板整节消失，
+        // 看着像"自动更新反而把数据弄没了"。抬头那格时间戳念的还是上一帧的时刻，停了多久一眼看得出来。
+        const e = rec.error || "抓不到";
+        if (d.probeErr !== e) { d.probeErr = e; moved++; }
+        continue;
+      }
+      // 按帧自带的时刻判"是不是新帧"：每次都认的话，面板会每 2 秒无谓重建一次（它按签名决定建不建）
+      if (!d.frame || d.frame.at !== rec.frame.at) { d.frame = rec.frame; d.probeErr = ""; moved++; }
+    }
+    if (moved) {
       paintZoneColors();
-      // 抓到一帧就重画头部：面板是"按这一帧该建哪几节"建出来的，帧一到签名就变了。
+      // 帧一到就要重画头部：面板是"按这一帧该建哪几节"建出来的，帧一变签名就变。
       // 这里必须走 refreshPerfHead（内部按 panelSig 决定要不要 buildPanel），不能只 paintPanel。
       refreshPerfHead();
-      await new Promise((r) => setTimeout(r, 1200));
     }
-  } finally {
-    roundRunning = false;
-    scheduleProbeRound();
+  } catch (e) {
+    lastPullErr = e.message || String(e);   // 服务端断了不当回事：下一拍再来，缓存里那几帧还在
   }
 }
-// 双击那一下的补抓：还没有帧就当场抓一次，不等下一轮（他报的"点开一直加载不出数据"就是这一段空窗）。
-// 有帧的情况不抓 —— 轮询会负责更新，双击不该变成"每点一下敲一次同事的机器"。
+function startPuller() { clearInterval(pullTimer); pullTimer = setInterval(pullFrames, PULL_MS); }
+// 手动催一轮（主人的"抓一帧"与自测用）：只让服务端立刻开跑，页面仍然从缓存拿数 —— 这一头不另发 SSH。
+async function kickRound() {
+  try {
+    const r = await fetch("/api/round", { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: j.error || ("HTTP " + r.status) };
+    return { ok: true, rounds: j.rounds };
+  } catch (e) { return { ok: false, error: e.message || String(e) }; }
+}
+// 双击那一下的补抓：还没有帧就当场抓一次，不等服务端那一轮（他报的"点开一直加载不出数据"就是这一段空窗）。
+// 有帧的情况不抓 —— 缓存会负责更新，双击不该变成"每点一下敲一次同事的机器"。
+// 观众这一头直接返回：/api/probe 只有主人能调，点了也只会被服务端 403（按钮不给他才是对的）。
 async function probeIfFreshless(d) {
-  if (!liveOf(d) || d.frame) return;
+  if (isViewer() || !liveOf(d) || d.frame) return;
   await probeDevice(d);
   paintZoneColors();
   refreshPerfHead();
 }
-// 开机那一次 = 第一轮（下面 probeRound 的注释就是它的规矩）。这一条末尾的 sync() 只在开机走：
-// 一轮抓完要把清单与场景对一遍账，但那是重造整排机器的大动作，不能跟着轮询每轮做一次。
+// 开机：先取一趟缓存（服务端可能已经转了几轮，那几台不该等第二趟才上数），再挂上定时取。
+// 末尾的 sync() 只在开机走：要把清单与场景对一遍账，但那是重造整排机器的大动作，不跟着每 2 秒做。
 async function bootProbe() {
-  await probeRound();
+  await pullFrames();
+  startPuller();
   sync();
 }
 function showTip(html) {
@@ -586,8 +611,10 @@ function setMonitorSetting(key, value, quiet) {
   if (!Number.isFinite(v)) return;
   MONITOR_SETTINGS[key] = clampv(v, lim[0], lim[1]);
   try { localStorage.setItem(MS_KEY, JSON.stringify(MONITOR_SETTINGS)); } catch (e) { /* 无痕模式写不进去就算了 */ }
-  // 两格节拍各管各的定时器：intervalMs 重排本地那一拍，probeEveryMs 重排抓帧那一轮
-  if (key === "probeEveryMs") scheduleProbeRound(); else startBeat();
+  // 两格里只有本地那一拍归页面管：intervalMs 重排 beat。
+  // probeEveryMs 搬去服务端了（它每轮跑完自己回 settings.json 读），所以动了这一格页面不需要重排任何东西
+  // —— 下一轮开始就按新值歇，最迟晚一轮。
+  if (key !== "probeEveryMs") startBeat();
   if (!quiet) touchSettings();
 }
 let beatTimer = 0;
@@ -779,18 +806,21 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
       + "|CPU=" + n(r.cpu) + "|GPU=" + (d.frame ? (r.gpu == null ? "无这一维" : n(r.gpu)) : "无帧")
       + "|内存=" + n(r.memPct) + "%" + (r.boost ? "（这一档是内存抬的）" : "");
   }),
-  // 抓帧轮询的读数：这一轮在不在跑、两格节拍各是多少、每台那一帧是多久之前抓的。
-  // 还有 probeNow() = 立刻跑一轮：自测不必干等 15 秒，它走的就是页面自己那条轮询路（不是另造的假数据）。
-  // 先问一句"这一轮在不在跑"：轮询本身是串行排期的（跑完才排下一轮），只有这个手勾能插出第二轮，
-  // 而两台机器同时被抓 = 真机 SSH 负载翻倍（18:09 实测踩过：手勾那一轮还没跑完又起了一轮）。
-  probeNow: () => (roundRunning ? "这一轮还在跑（一轮 20~45 秒，看几台机器几台在线）" : probeRound()),
-  probeState: () => ({ 轮询中: roundRunning, intervalMs: MONITOR_SETTINGS.intervalMs,
-    probeEveryMs: MONITOR_SETTINGS.probeEveryMs,
+  // 抓帧的读数：现在这一轮跑在服务端，所以这几格念的是"服务端那一轮到哪了"（/api/frames 顺带回的），
+  // 外加两格节拍、每台那一帧是多久之前抓的、以及页面这一头取缓存取到没有。
+  // probeNow() = 催服务端立刻开跑一轮：自测不必干等下一轮，走的仍是真链路（不是页面另造假数据）。
+  // 催两下不会叠出两轮 SSH：服务端 runRound 头上就有"这一轮还在跑就直接返回"那道勾（18:09 实测踩过
+  // 手勾压着轮询那一轮跑，两台机器同时被抓 = 真机负载翻倍，所以这道勾是有意留的）。
+  probeNow: () => kickRound(),
+  probeState: () => ({ 服务端那一轮: lastRounds, 取缓存: lastPullErr ? "上一趟失败：" + lastPullErr : "每 " + PULL_MS + " ms 一趟",
+    intervalMs: MONITOR_SETTINGS.intervalMs, probeEveryMs: MONITOR_SETTINGS.probeEveryMs,
     帧距今秒: devices.filter((d) => liveOf(d)).map((d) => d.short + ":"
       + (d.frame ? Math.round((Date.now() - Date.parse(d.frame.at)) / 1000) : d.probeErr ? "失败" : "待抓")) }),
   pulseSettings: () => ({ ...PULSE_SETTINGS, intervalMs: MONITOR_SETTINGS.intervalMs }),
   // 设置存哪儿：部署成看板后"到底在读文件还是只在浏览器里"要能一问就答（屏上那行字也行，这里是给仪器用的）
   settingsMode: settingsState,
+  // 这一台是主人还是观众：放开"看"之后这是第一个要能读出来的身份（齿轮在不在、能不能补抓，全看它）
+  amViewer: () => (location.protocol === "file:" ? "file://" : isViewer()),
   // 地面与雨的读数是 ground.mjs 自己出的（它才是 rippleTerrain / binaryRain 的主人），这里只留键名。
   ground: groundStats,
   groundRun,
