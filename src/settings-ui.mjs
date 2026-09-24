@@ -9,12 +9,13 @@
 import { THREE } from "./three.mjs";
 import { TIERS, tierOf, mkDev, seq, devices, setDevices, ZONES, ZONE_FIELD, ZONE_AISLE, ZONE_PITCH,
   ZONE_KEY_RE, ZONE_MAX, zoneKeyOf, zoneOf, OS_LABEL, MONITOR_SETTINGS, MON_LIMITS, MS_KEY,
-  PULSE_SETTINGS, PULSE_LIMITS, PS_KEY, liveOf, zoneOffOf } from "./model.mjs";
+  PULSE_SETTINGS, PULSE_LIMITS, PS_KEY, liveOf, zoneOffOf,
+  STATES, GRADE_KEYS, gradeBounds, setGrade, gradeValues } from "./model.mjs";
 import { fmt, clampv, pctFmt, mmFmt } from "./format.mjs";
 import { el, mini, fieldRow, textField, sliderRow, bindOnOff } from "./ui.mjs";
 import { perfDev, hidePerf, refreshPerfHead } from "./dashboard.mjs";
 import { rebuild, applyState, holderOf } from "./fleet.mjs";
-import { setPulseSetting, setPulseEnabled, setRippleEnabled, setRainEnabled } from "./ground.mjs";
+import { setPulseSetting, setPulseEnabled, setRippleEnabled, setRainEnabled, setGradeSetting } from "./ground.mjs";
 
 // 页面递进来的三样动作：探针（抓一帧 + 把结果写在浮层里）、节拍 setter（改了任何一格节拍都要重排它的定时器）、
 // 相机（点设备行那个"位置"链接要聚焦、开弹窗要先收掉钉住的牌）。声明成 let 是因为它们只在点击时被调，
@@ -308,30 +309,55 @@ pulseOnBtn.addEventListener("click", () => { setPulseEnabled(!PULSE_SETTINGS.ena
 paintPulseOn();
 uiPaints.push(paintPulseOn);
 
-// 地面与雨：六格涟漪滑杆（含点阵密度、点径两颗点阵旋钮）+ 一格雨亮度，跟脉冲滑杆同一条 sliderRow / 同一份 PULSE_SETTINGS
+// 地面与雨：涟漪五格（高度/环宽/亮度 + 点阵两颗旋钮）+ 一格雨亮度，跟脉冲滑杆同一条 sliderRow / 同一份 PULSE_SETTINGS
+// mount 分两摊：荡得怎么样的三格留在地面那一节，"点阵本身长什么样"那两格单独一节（2026-09-24 他说参数太多要分组）。
 for (const o of [
-  { key: "rippleHeight", title: "涟漪高度", fmt: (v) => v.toFixed(1),
+  { key: "rippleHeight", mount: "rippleRows", title: "涟漪高度", fmt: (v) => v.toFixed(1),
     hint: "0 = 环只亮不起伏（水面静谧感）；0.5 轻触、2.5 投石、8 山丘。参考推荐 0.5 / 2.5。地面那层自己走的底波也吃这一格。" },
-  { key: "rippleSpeed", title: "涟漪速度", fmt: (v) => v.toFixed(0),
-    hint: "环每秒荡多远。10 像水面涟漪、22 有脉冲节奏、50 像冲击波扫过。" },
-  { key: "rippleThickness", title: "涟漪环厚度", fmt: (v) => v.toFixed(1),
+  { key: "rippleThickness", mount: "rippleRows", title: "涟漪环厚度", fmt: (v) => v.toFixed(1),
     hint: "0.3 一圈激光环、1.0 精细、4 一片水波。过大环会糊在一起失去\"环\"形。" },
-  { key: "rippleBrightness", title: "涟漪亮度", fmt: pctFmt,
+  { key: "rippleBrightness", mount: "rippleRows", title: "涟漪亮度", fmt: pctFmt,
     hint: "点阵被点亮的程度。0 只剩起伏看不见环；2 过曝发白。参考推荐 0.25 克制档。" },
-  { key: "dotSeg", title: "点阵密度", fmt: (v) => (24000 / v).toFixed(0) + " mm",
+  { key: "dotSeg", mount: "dotRows", title: "点阵密度", fmt: (v) => (24000 / v).toFixed(0) + " mm",
     hint: "两个点之间隔多少毫米（默认 75 = 2026-09-24 定下来的档）。往左疏、往右密：60 段 = 400 mm 一格一格，"
       + "360 段 = 67 mm（13 万个点，比默认档再多三成，机器差就往回拉）。"
       + "只改采样密度，涟漪的高度/环宽/波长一个数都没跟着变。密了以后整张地会更亮——点是加法混合叠的，"
       + "要么把上面那格涟漪亮度往回拉，要么把下面那格点径往回拉。" },
-  { key: "dotSizeMm", title: "点径", fmt: (v) => v.toFixed(0) + " mm",
+  { key: "dotSizeMm", mount: "dotRows", title: "点径", fmt: (v) => v.toFixed(0) + " mm",
     hint: "一粒点画多大（世界毫米），默认 56 = 参考里那个 0.7 单位。跟密度是两回事：上面那格管"
       + "\"摆多密\"，这一格管\"多大一粒\"。拉小 = 点更分明、整片更暗（加法混合叠的面积小了），"
       + "拉大 = 糊成地皮。想看清\"一粒一粒\"就把它压到点距的一半以下。" },
 ]) {
-  uiPaints.push(sliderRow(document.getElementById("rippleRows"), {
+  uiPaints.push(sliderRow(document.getElementById(o.mount), {
     title: o.title, hint: o.hint, limits: PULSE_LIMITS[o.key], fmt: o.fmt,
     get: () => PULSE_SETTINGS[o.key],
     set: (v) => setPulseSetting(o.key, v),
+  }));
+}
+// 三档波速 + 三档节拍：六根**关联**滑杆（2026-09-24 他裁的乙，"避免黄色调的比绿色还慢"）。
+// 每根的活动区间每次重画现取（gradeBounds），所以拖到挨着邻居就拖不动了 —— 不弹错、不用记规矩。
+// 值不在 PULSE_SETTINGS 里：它们就是 STATES 那三行的 speed / interval，滑杆、settings.json、地面共用一份。
+// 落盘后必须整窗重画一次：这一根动过，另外两根的区间也跟着动，不重画就会留下一个能拖进禁区间的旧滑杆。
+const GRADE_ROWS = [
+  { field: "speed", idx: 0, title: "波速 · 空闲（绿）",
+    hint: "绿的环每秒荡多远。默认 8 = 慢慢漾开，读起来是「这台活着」而不是「这里有事」。" },
+  { field: "speed", idx: 1, title: "波速 · 活跃（黄）",
+    hint: "夹在绿与红之间，拖不出反序。默认 16 ≈ 以前那根全局 10 往上一档。" },
+  { field: "speed", idx: 2, title: "波速 · 高负载（红）",
+    hint: "30 像被踩了一脚的水面，往上到 50 就是冲击波扫过去。只能往绿与黄之上拖。" },
+  { field: "interval", idx: 0, title: "节拍 · 空闲（绿）",
+    hint: "隔多久起一圈。默认 3.0 s = 「偶尔一个波浪」。这一根同时也管脚下脉冲几连发的节奏（参考那张表就是一个数）。" },
+  { field: "interval", idx: 1, title: "节拍 · 活跃（黄）", hint: "绿 ≥ 黄 ≥ 红：越忙起圈越勤，反了就是设置没生效。" },
+  { field: "interval", idx: 2, title: "节拍 · 高负载（红）",
+    hint: "默认 1.2 s。往 0.3 拖是「一圈叠一圈」，八台一起那么响就很吵了 —— 眼睛说了算。" },
+];
+for (const o of GRADE_ROWS) {
+  uiPaints.push(sliderRow(document.getElementById("gradeRows"), {
+    title: o.title, hint: o.hint,
+    limits: () => gradeBounds(o.field, o.idx),
+    fmt: (v) => (o.field === "speed" ? v.toFixed(0) : v.toFixed(1) + " s"),
+    get: () => STATES[o.idx][o.field],
+    set: (v) => { setGradeSetting(o.field, o.idx, v); paintSettingsUI(); },
   }));
 }
 uiPaints.push(sliderRow(document.getElementById("rainRows"), {
@@ -365,17 +391,16 @@ function settingsToFile() {
       upParticleBrightness: PULSE_SETTINGS.upParticleBrightness,
       travelK: PULSE_SETTINGS.travelK,
     },
-    ground: {
+    ground: Object.assign({
       rippleEnabled: PULSE_SETTINGS.rippleEnabled,
       rippleHeight: PULSE_SETTINGS.rippleHeight,
-      rippleSpeed: PULSE_SETTINGS.rippleSpeed,
       rippleThickness: PULSE_SETTINGS.rippleThickness,
       rippleBrightness: PULSE_SETTINGS.rippleBrightness,
       dotSeg: PULSE_SETTINGS.dotSeg,
       dotSizeMm: PULSE_SETTINGS.dotSizeMm,
       rainEnabled: PULSE_SETTINGS.rainEnabled,
       rainBrightness: PULSE_SETTINGS.rainBrightness,
-    },
+    }, gradeValues()),   // 六档波速/节拍：键名与夹好的值都由 model 那张 GRADE_KEYS 表给，这里不重抄
     monitor: { intervalMs: MONITOR_SETTINGS.intervalMs, probeEveryMs: MONITOR_SETTINGS.probeEveryMs },
   };
 }
@@ -403,11 +428,19 @@ function applySettings(o) {
   if (g && typeof g === "object") {
     if (typeof g.rippleEnabled === "boolean" && g.rippleEnabled !== PULSE_SETTINGS.rippleEnabled) { setRippleEnabled(g.rippleEnabled, true); changed = true; }
     if (typeof g.rainEnabled === "boolean" && g.rainEnabled !== PULSE_SETTINGS.rainEnabled) { setRainEnabled(g.rainEnabled, true); changed = true; }
-    for (const k of ["rippleHeight", "rippleSpeed", "rippleThickness", "rippleBrightness", "dotSeg", "dotSizeMm", "rainBrightness"]) {
+    for (const k of ["rippleHeight", "rippleThickness", "rippleBrightness", "dotSeg", "dotSizeMm", "rainBrightness"]) {
       const lim = PULSE_LIMITS[k], v = Number(g[k]);
       if (!Number.isFinite(v)) continue;
       const nv = clampv(v, lim[0], lim[1]);
       if (nv !== PULSE_SETTINGS[k]) { PULSE_SETTINGS[k] = nv; changed = true; }
+    }
+    // 六档波速/节拍走 setGrade 本体，不走 setGradeSetting：从文件读值不该反写文件。
+    // 但"被相邻档夹过"必须算 changed —— 夹完的生效值要写回去，settings.json 里躺的才是屏上实际那三档。
+    for (const [k, field, i] of GRADE_KEYS) {
+      const v = Number(g[k]);
+      if (!Number.isFinite(v)) continue;
+      const before = STATES[i][field];
+      if (setGrade(field, i, v) !== before) changed = true;
     }
   }
   const m = o.monitor;

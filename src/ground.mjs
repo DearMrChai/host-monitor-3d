@@ -5,7 +5,7 @@
 // 依赖是单向的：地面 ← 陈列层（holderOf / paintLabel 要问"这台在屏幕上有没有位置"），
 // 反过来谁都不认页面 —— scene / clock / 写文件那三样由 initGround 递进来（同 fleet 那一刀）。
 import { THREE } from "./three.mjs";
-import { devices, holders, loads, PULSE_SETTINGS, PULSE_LIMITS, PS_KEY,
+import { devices, holders, loads, PULSE_SETTINGS, PULSE_LIMITS, PS_KEY, STATES, pulseStore, applyGradeValues, setGrade,
   stateOf, gradeOf, levelOf, zoneOffOf, liveOf } from "./model.mjs";
 import { clampv } from "./format.mjs";
 import { framePct } from "./dashboard.mjs";
@@ -32,6 +32,7 @@ try {
   if (typeof saved.rippleEnabled === "boolean") PULSE_SETTINGS.rippleEnabled = saved.rippleEnabled;
   if (typeof saved.rainEnabled === "boolean") PULSE_SETTINGS.rainEnabled = saved.rainEnabled;
   for (const k in PULSE_LIMITS) if (Number.isFinite(saved[k])) setPulseSetting(k, saved[k], true);
+  applyGradeValues(saved);   // 六档波速/节拍住在 STATES 里，不在 PULSE_LIMITS 那张表上，所以单独走一次
 } catch (e) { /* 读不到就用默认值 */ }
 export function setPulseSetting(key, value, quiet) {
   const lim = PULSE_LIMITS[key];
@@ -40,14 +41,24 @@ export function setPulseSetting(key, value, quiet) {
   if (!Number.isFinite(v)) return;
   PULSE_SETTINGS[key] = clampv(v, lim[0], lim[1]);
   if (quiet) return;   // 启动时恢复存档：逐个写 localStorage 没必要，也不该反过来覆盖
-  try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); } catch (e) { /* 同上 */ }
+  try { localStorage.setItem(PS_KEY, pulseStore()); } catch (e) { /* 同上 */ }
   touchSettings();
+}
+// 六根关联滑杆（三档波速 / 三档节拍）的写入口：夹进量程、被相邻档挡住，全在 model 的 setGrade 里，
+// 这一层只补"落盘"那一步，跟上面 setPulseSetting 一个规矩（quiet = 从文件或存档恢复时不反写回去）。
+// 返回实际生效值：滑杆要按它回显，越界的写法（手改 settings.json）当场就能在屏上看出来被收掉了。
+export function setGradeSetting(field, idx, value, quiet) {
+  const v = setGrade(field, idx, value);
+  if (quiet) return v;
+  try { localStorage.setItem(PS_KEY, pulseStore()); } catch (e) { /* 同上 */ }
+  touchSettings();
+  return v;
 }
 // 关的时候不等在飞的自己散完：拨开关要的是"这一帧屏幕上就没了"，慢收尾看着像开关没生效。
 // 函数体引用的 livePulses / liveUp / disposePoints 在下面才声明 —— 只在点击时调用，不在求值期跑。
 export function setPulseEnabled(on, quiet) {
   PULSE_SETTINGS.enabled = !!on;
-  try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); } catch (e) { /* 同上 */ }
+  try { localStorage.setItem(PS_KEY, pulseStore()); } catch (e) { /* 同上 */ }
   if (!quiet) touchSettings();
   if (PULSE_SETTINGS.enabled) return;
   for (const rt of pulseRt.values()) { rt.queue.length = 0; rt.nextBurst = null; }
@@ -165,10 +176,10 @@ class RippleTerrain {
     this.b2x = new Float32Array(n); this.b2z = new Float32Array(n);
     this.flat = true;   // 新建的网格本就全平、底色已铺待机蓝，第一帧不用再抹一遍
   }
-  addRipple(x, z, colorHex, amplitude = 1) {
+  addRipple(x, z, colorHex, amplitude = 1, speed = STATES[1].speed) {
     const c = new THREE.Color(colorHex);
     this.ripples.push({ x: x / GROUND_S, z: z / GROUND_S, colorR: c.r, colorG: c.g, colorB: c.b,
-      age: 0, radius: 0, amplitude });
+      age: 0, radius: 0, amplitude, speed });
     // 上限兜最坏情况：参考演示只有 3 台设备，我们 8 台全 ALERT 时稳态能到三十几个环，
     // 不设上限的话每帧成本无顶。超了丢最老的（视觉上就是最淡的那圈先没）。
     while (this.ripples.length > RIPPLE_MAX) this.ripples.shift();
@@ -191,7 +202,6 @@ class RippleTerrain {
     const positions = this.geometry.attributes.position.array;
     const colors = this.geometry.attributes.color.array;
     const height = PULSE_SETTINGS.rippleHeight;
-    const speed = PULSE_SETTINGS.rippleSpeed;
     const thickness = PULSE_SETTINGS.rippleThickness;
     const brightness = PULSE_SETTINGS.rippleBrightness;
     const maxAge = RIPPLE_MAX_AGE;
@@ -200,7 +210,7 @@ class RippleTerrain {
     for (let i = this.ripples.length - 1; i >= 0; i--) {
       const r = this.ripples[i];
       r.age += delta;
-      r.radius = r.age * speed;
+      r.radius = r.age * r.speed;   // 速度是起圈那一刻从档位取走的（三档各不同），不在这里读全局
       if (r.age >= maxAge || r.radius > 150) this.ripples.splice(i, 1);
     }
     if (!this.ripples.length && !breath) {
@@ -303,7 +313,7 @@ let rippleTerrain = null;
 const rippleRt = new Map();   // device.id -> { next }  涟漪自己的节拍，跟 pulseRt 无关
 export function setRippleEnabled(on, quiet) {
   PULSE_SETTINGS.rippleEnabled = !!on;
-  try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); } catch (e) { /* 同上 */ }
+  try { localStorage.setItem(PS_KEY, pulseStore()); } catch (e) { /* 同上 */ }
   if (!PULSE_SETTINGS.rippleEnabled) {
     rippleTerrain.clear();
     for (const rt of rippleRt.values()) rt.next = null;   // 重新打开时相位重错，不"关五分钟一开全场同拍"
@@ -408,7 +418,7 @@ class BinaryRain {
 let binaryRain = null;   // 同上
 export function setRainEnabled(on, quiet) {
   PULSE_SETTINGS.rainEnabled = !!on;
-  try { localStorage.setItem(PS_KEY, JSON.stringify(PULSE_SETTINGS)); } catch (e) { /* 同上 */ }
+  try { localStorage.setItem(PS_KEY, pulseStore()); } catch (e) { /* 同上 */ }
   if (!quiet) touchSettings();
 }
 // 地面的数值正对照：截图是黑的（WebGL 抓帧的老毛病），"底波在不在动"只能靠顶点高度取证。
@@ -434,7 +444,8 @@ export function updateGround(delta, t) {
 }
 // 涟漪自己的节拍（2026-09-24 脱钩）：以前这圈环是"脉冲爆发时顺手踢一脚"才有的，
 // 于是关了脉冲地面就一直是平的 —— 用户裁定两者是独立的两个效果。现在每台按自己负载档位
-// 的间隔（空闲 3.0s / 活跃 2.0s / 高负载 1.2s）自己起圈，颜色与强度仍取自同一张 STATES 表，
+// 的间隔（默认 3.0 / 2.0 / 1.2 s，2026-09-24 起是六根关联滑杆里的三根）自己起圈，
+// 颜色、强度与**波速**都取自同一张 STATES 表，
 // 所以"脚下什么色 = 什么档位"这条读法跟脉冲完全一致，只是两套计时器互不牵连。
 function stepRipples(t) {
   if (!PULSE_SETTINGS.rippleEnabled) return;
@@ -452,7 +463,7 @@ function stepRipples(t) {
     if (rt.next === null) rt.next = t + (i * st.interval) / spread;
     // 落后多少都只补一圈（不追帧）：切到后台再回来那一瞬，不该在原地撒出十几圈
     if (t >= rt.next) {
-      rippleTerrain.addRipple(h.x, h.z, st.color, st.amplitude);
+      rippleTerrain.addRipple(h.x, h.z, st.color, st.amplitude, st.speed);
       rt.next = t + st.interval;
     }
   }
@@ -740,8 +751,10 @@ export function groundRun(steps) {
 // 正对照：手动撒 n 个涟漪，量"有环"时的每帧成本（跟 groundRun 空跑对比才知道环带剔除省了多少）
 export function rippleKick(n) {
   for (let i = 0; i < n; i++) {
+    // 颜色与波速都按 STATES 轮着取：撒出来的那把环跟真跑起来的一样三档混着，成本读数才是同一件事
+    const st = STATES[i % STATES.length];
     rippleTerrain.addRipple((Math.random() - 0.5) * 9000, (Math.random() - 0.5) * 9000,
-      [0x00ff41, 0xffcc00, 0xff0033][i % 3], 1);
+      st.color, 1, st.speed);
   }
   return rippleTerrain.ripples.length;
 }

@@ -50,9 +50,12 @@ function textField(kind, value, placeholder, onInput) {
   return i;
 }
 
-// 一行滑杆：标题 + 当前值 + 滑杆 + 一句说明；onInput 负责写回配置并（按需）落盘
+// 一行滑杆：标题 + 当前值 + 滑杆 + 一句说明；onInput 负责写回配置并（按需）落盘。
+// o.limits 可以是 [min,max,step]，也可以是每次重画现取这个数组的函数 —— 六根关联滑杆要用后者：
+// 三档互相夹着，活动区间随另外两根当前位置变，写死一次就等于把"拖不出反序"这条保证丢掉。
 function sliderRow(mount, o) {
-  const [min, max, step] = o.limits;
+  const bounds = () => (typeof o.limits === "function" ? o.limits() : o.limits);
+  const [b0, b1, b2] = bounds();
   const wrap = el("div", "sld");
   const lab = el("div", "lab");
   lab.append(el("span", null, o.title));
@@ -60,10 +63,12 @@ function sliderRow(mount, o) {
   lab.append(val);
   const input = document.createElement("input");
   input.type = "range";
-  input.min = min; input.max = max; input.step = step;
+  input.min = b0; input.max = b1; input.step = b2;
   input.setAttribute("aria-label", o.title);
   wrap.append(lab, input, el("div", "hint", o.hint));
   const paint = () => {
+    const [min, max, step] = bounds();
+    input.min = min; input.max = max; input.step = step;
     const v = o.get();
     input.value = v;
     val.textContent = o.fmt(v);

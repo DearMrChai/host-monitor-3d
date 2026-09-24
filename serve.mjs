@@ -145,8 +145,12 @@ async function loadZones() {
 const SET_SHAPE = {
   pulse: { enabled: "bool", pulseStartBrightness: "num", pulseEndBrightness: "num",
     upParticleBrightness: "num", travelK: "num" },
-  ground: { rippleEnabled: "bool", rippleHeight: "num", rippleSpeed: "num",
-    rippleThickness: "num", rippleBrightness: "num", dotSeg: "num", dotSizeMm: "num", rainEnabled: "bool", rainBrightness: "num" },
+  ground: { rippleEnabled: "bool", rippleHeight: "num",
+    rippleThickness: "num", rippleBrightness: "num", dotSeg: "num", dotSizeMm: "num", rainEnabled: "bool", rainBrightness: "num",
+    // 三档波速与三档节拍（2026-09-24 他裁的六根关联滑杆）。原来那一格 rippleSpeed 已经不存了：
+    // 值搬进 STATES 的 speed / interval，老文件里残留的 rippleSpeed 这一认不到，就被顺手改写掉（不猜它想配谁）。
+    rippleSpeedIdle: "num", rippleSpeedActive: "num", rippleSpeedAlert: "num",
+    rippleIntervalIdle: "num", rippleIntervalActive: "num", rippleIntervalAlert: "num" },
   monitor: { intervalMs: "num" },
 };
 // 文件第一行那句人话。放在服务端而不是页面里：整份删掉重建时也得有人写这一句，

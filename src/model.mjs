@@ -119,7 +119,8 @@ const PULSE_SETTINGS = {
   // 两颗开关互相独立、也独立于上面的 enabled：脉冲关了脚下安静，地面和雨照旧。
   rippleEnabled: true,
   rippleHeight: 0.5,           // 涟漪高度（参考单位）：0 = 只亮不起伏
-  rippleSpeed: 10,             // 环每秒荡多远（参考单位/秒）：10 像水面、40 像冲击波
+  // 「环每秒荡多远」和「多久起一圈」不在这一格里：2026-09-24 他裁的三档关联那六根，
+  // 值就住在下面 STATES 的 speed / interval 两个字段上（滑杆读写的是它，见 setGrade）。
   rippleThickness: 1.0,        // 环厚度：0.3 一圈激光环、4 一片水波
   rippleBrightness: 0.25,      // 点阵被点亮的程度（参考推荐"克制"档）
   // 点阵密度 = 地面每边的段数：顶点 (n+1)²，点距 = 24000/n mm。它只换采样分辨率，
@@ -135,9 +136,9 @@ const PULSE_LIMITS = {
   pulseEndBrightness: [0.02, 0.8, 0.01],
   upParticleBrightness: [0.02, 1, 0.01],
   travelK: [2, 24, 0.5],
-  // 范围照参考参数表的"建议范围"：height 0~8 / speed 5~50 / thickness 0.3~4 / brightness 0~2 / rain 0~0.8
+  // 范围照参考参数表的"建议范围"：height 0~8 / thickness 0.3~4 / brightness 0~2 / rain 0~0.8
+  // （原来那格 speed 5~50 挪到下面的 GRADE_LIMITS.speed —— 它现在是三档共用的量程，不是一根滑杆）
   rippleHeight: [0, 8, 0.1],
-  rippleSpeed: [5, 50, 1],
   rippleThickness: [0.3, 4, 0.1],
   rippleBrightness: [0, 2, 0.05],
   // 密度档：60 段 = 400 mm 点距（疏得能看见一格一格），360 段 = 66.7 mm 点距 = 13 万顶点。
@@ -153,11 +154,13 @@ const PS_KEY = "hm.pulse.v1";
 // 三级分级：结构照参考保留（颜色 / 间隔 / 单次爆发几连），max = 这一档的负载上限（%）。
 // amplitude 是地面涟漪的强度（参考值：空闲 0.6 / 活跃 0.85 / 警报 1.2）。2026-09-24 起它只被
 // 涟漪自己的节拍 stepRipples 读，脚下脉冲不再带着它 —— 三档的"颜色/间隔"两边仍同源，所以读法没散。
+// speed 是这一档的环每秒荡多远（2026-09-24 他裁："绿色应该是偶尔一个波浪、红色应该高于绿色"）：
+// 环在**生成那一刻**取走它，之后不跟着滑杆回改，所以正在荡的半圈不会突然加速。
 // 阈值是我先定的，要聊就改这三格，别的都不用动。
 const STATES = [
-  { key: "IDLE", cn: "空闲", color: 0x00ff41, interval: 3.0, burst: 1, max: 35, amplitude: 0.6 },
-  { key: "ACTIVE", cn: "活跃", color: 0xffcc00, interval: 2.0, burst: 2, max: 70, amplitude: 0.85 },
-  { key: "ALERT", cn: "高负载", color: 0xff0033, interval: 1.2, burst: 3, max: 100, amplitude: 1.2 },
+  { key: "IDLE", cn: "空闲", color: 0x00ff41, interval: 3.0, burst: 1, max: 35, amplitude: 0.6, speed: 8 },
+  { key: "ACTIVE", cn: "活跃", color: 0xffcc00, interval: 2.0, burst: 2, max: 70, amplitude: 0.85, speed: 16 },
+  { key: "ALERT", cn: "高负载", color: 0xff0033, interval: 1.2, burst: 3, max: 100, amplitude: 1.2, speed: 30 },
 ];
 const stateOf = (load) => STATES.find((s) => load <= s.max) || STATES[STATES.length - 1];
 // 综合档位（2026-09-24 他裁的口径 B）。传进来的 pct 已经是"这一帧有多忙"的那一个数
@@ -173,6 +176,66 @@ const gradeOf = (pct, memPct) => {
   const s = stateOf(pct);
   return s.key === "IDLE" && typeof memPct === "number" && memPct >= MEM_BOOST_PCT ? STATES[1] : s;
 };
+
+// ---------- 三档的波速与节拍：六根关联滑杆的后端（2026-09-24 他裁的乙）----------
+// 值不另存一份：滑杆、settings.json、涟漪与脉冲读写的都是上面 STATES 里的 speed / interval 本身。
+// 两处共用是有意的 —— 参考那份表里 interval 就同时管"地面起圈"和"脚下起爆"（stepRipples / triggerBurst
+// 都读它），拆成两份就会出现"脚下黄、地上绿"那种读法冲突。
+// 量程：波速照参考的 5~50（10 像水面、22 有节奏、50 像冲击波）；节拍给 0.3~10 s
+// （0.3 = 一秒三圈已经糊成一片，10 = 半天看不见一圈，两端都是故意留给"难看得很明显"的档）。
+const GRADE_LIMITS = { speed: [5, 50, 1], interval: [0.3, 10, 0.1] };
+// speed 要 绿 ≤ 黄 ≤ 红（越忙荡得越快）；interval 要 绿 ≥ 黄 ≥ 红（越忙起圈越勤）。
+const GRADE_ASC = { speed: true, interval: false };
+// 这一档能活动的闭区间：一边被"比它闲的档"顶住、另一边被"比它忙的档"顶住。
+// 滑杆每次重画都现取，所以三根条的长短是随彼此实时变的 —— 拖不出反序，不弹错也不报错。
+// 第三个位置回填**步进**：滑杆要的是 [min, max, step] 一整份，只回两个数它会把 step 写成 "undefined"，
+// 节拍那三根就退化成整秒一档（1.2 / 2.3 这种默认值再也拖不出来）—— 2026-09-24 在真 DOM 里读到的。
+function gradeBounds(field, idx) {
+  const [lo, hi, step] = GRADE_LIMITS[field];
+  const asc = GRADE_ASC[field];
+  let min = lo, max = hi;
+  for (let j = 0; j < STATES.length; j++) {
+    if (j === idx) continue;
+    const v = STATES[j][field];
+    const raisesFloor = asc ? j < idx : j > idx;
+    if (raisesFloor) { if (v > min) min = v; } else if (v < max) max = v;
+  }
+  return [min, max, step];
+}
+// 写一个数：先进总量程 → 按步进取整 → 最后被相邻档夹住。返回**实际生效值**（滑杆按它回显，
+// 文件里越界的值也走这一条），跟其他设置格同一个规矩：settings.json 躺的永远是生效值。
+function setGrade(field, idx, v) {
+  const [lo, hi, step] = GRADE_LIMITS[field];
+  const n0 = Number(v);
+  if (!Number.isFinite(n0)) return STATES[idx][field];
+  const b = gradeBounds(field, idx);
+  let n = Math.round(Math.min(hi, Math.max(lo, n0)) / step) * step;
+  n = Math.min(b[1], Math.max(b[0], n));
+  STATES[idx][field] = Math.round(n * 100) / 100;
+  return STATES[idx][field];
+}
+// settings.json 里那六个键 ↔ (字段, 档位)：读写两边都从这一张表走，键名只在这一处出现。
+const GRADE_KEYS = [
+  ["rippleSpeedIdle", "speed", 0], ["rippleSpeedActive", "speed", 1], ["rippleSpeedAlert", "speed", 2],
+  ["rippleIntervalIdle", "interval", 0], ["rippleIntervalActive", "interval", 1], ["rippleIntervalAlert", "interval", 2],
+];
+// 这六格的当前值 → 一个能 JSON 化的对象：写 settings.json、写浏览器兜底存档都取这一份。
+function gradeValues() {
+  const o = {};
+  for (const [k, field, i] of GRADE_KEYS) o[k] = STATES[i][field];
+  return o;
+}
+// 反向：从一份设置对象里恢复（缺键就跳过 —— 老 settings.json 里没这六格，走默认值是正常路径）。
+// 返回认得几格，让调用方能拿它当"读数不能为 0"的正对照。
+function applyGradeValues(o) {
+  let n = 0;
+  for (const [k, field, i] of GRADE_KEYS) {
+    if (o && Number.isFinite(Number(o[k]))) { setGrade(field, i, o[k]); n++; }
+  }
+  return n;
+}
+// localStorage 那一整份：PULSE_SETTINGS + 六档值合在一起写，所以 file:// 场景也不会有第二套真源。
+function pulseStore() { return JSON.stringify(Object.assign({}, PULSE_SETTINGS, gradeValues())); }
 
 // 配置文件里的每一行 → 场景里的设备对象：档位不认识退到 mATX，分区名不在表里就按档位自动落区。
 // 原来这段写在 loadDevices 里，整份换绑走不了导入方，所以搬进来。
@@ -211,6 +274,7 @@ const zoneOffOf = (d) => { const z = ZONES.find((q) => q.key === zoneKeyOf(d)); 
 const levelOf = (d) => (d.power ? STATES.find((s) => s.key === (loads.get(d.id) || {}).key) : null);
 
 export { TIERS, tierOf, mkDev, seq, devices, SPACING, ZONES, ZONE_FIELD, ZONE_AISLE, ZONE_PITCH,
+  GRADE_LIMITS, GRADE_KEYS, gradeBounds, setGrade, gradeValues, applyGradeValues, pulseStore,
   ZC, ZONE_KEY_RE, ZONE_MAX, ZONE_OF_TIER, zoneKeyOf, zoneOf, CLUSTER_SPACING, CLUSTER_ROW_GAP,
   CLUSTER_PER_ROW, OS_LABEL, MONITOR_SETTINGS, MON_LIMITS, MS_KEY, PULSE_SETTINGS, PULSE_LIMITS,
   PS_KEY, STATES, stateOf, gradeOf, MEM_BOOST_PCT, zoneOffOf, levelOf };

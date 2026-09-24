@@ -297,7 +297,8 @@
            再打开会重新错开相位发（不会补一轮齐发）。开关和下面四格都是实时生效，
            值写回同目录 settings.json（没起本地服务时退回落浏览器 localStorage，见标题那行）。
            脉冲只从"开机"的设备脚下发出；颜色与节奏由分级决定：空闲＝绿·3.0s·单发，
-           活跃＝黄·2.0s·双发，高负载＝红·1.2s·三连发（阈值见 docs/尺寸与实测.md 第八节，要改说一声）。
+           活跃＝黄·2.0s·双发，高负载＝红·1.2s·三连发（那三个秒数是默认值，地面那一节的"节拍"三根可改；
+           阈值见 docs/尺寸与实测.md 第八节，要改说一声）。
            参考里那层 UnrealBloom 辉光没带过来 —— 派单禁止引 three 的 examples/，
            所以这里的光晕只靠贴图柔光＋叠加混合，比参考暗一档是预期。</p>
       </section>
@@ -305,20 +306,29 @@
         <div class="ph"><b>地面涟漪</b><span class="cnt">点阵地面自己荡的环</span><span class="grow"></span>
           <button id="rippleOn" class="mini pw on" type="button" aria-pressed="true">涟漪 开</button></div>
         <div id="rippleRows"></div>
+        <div class="ph ph-gap"><b>三档波速与节拍</b><span class="cnt">六根关联滑杆 · 拖不出反序</span></div>
+        <div id="gradeRows"></div>
+        <div class="ph ph-gap"><b>点阵</b><span class="cnt">地面那张网本身有多密、一粒多大</span></div>
+        <div id="dotRows"></div>
         <div class="ph ph-gap"><b>二进制雨</b><span class="cnt">背景那圈下落的 0/1</span><span class="grow"></span>
           <button id="rainOn" class="mini pw on" type="button" aria-pressed="true">雨 开</button></div>
         <div id="rainRows"></div>
         <p class="fine">地面是一张点阵（默认 321×321 = 10.3 万点、点距 75 mm，替掉了原来的网格线；"点阵密度"那格可拉疏到 61² = 3.7 千点、也可拉密到 361² = 13 万点）。开着涟漪时它做两件事：
            整张地按两列正弦慢慢起伏（这层底波不需要谁去踢，涟漪自己带），以及每台开机设备按自己负载档位的
-           间隔（空闲 3.0s／活跃 2.0s／高负载 1.2s）从脚下起一圈向外荡的环，环与环互相穿过叠加。
+           间隔从脚下起一圈向外荡的环，环与环互相穿过叠加。
            涟漪与脉冲是两个独立效果：关掉"脉冲 开/关"地面照荡，关掉"涟漪 开/关"点阵原地静止（不找回原来的网格线）。
            涟漪滑杆里 height 同时管涟漪环和底波的高低，brightness 同时管两者的明暗；
            "点阵密度"只换采样分辨率、不动任何波形系数——密出来的是同一圈波用更碎的点画，不是另一圈波。
            "点径"管每一粒画多大（默认 56 mm = 参考里那个写死值）：想看清"一粒一粒"就把它压到点距的一半以下，
            拉大则点手拉手连成一片。点是加法混合叠的，越密越大整片越亮，嫌亮就把 brightness 或点径往回拉。
+           <b>三档波速与节拍那六根是关联的</b>（2026-09-24 定的）：波速必须 绿 ≤ 黄 ≤ 红、节拍必须 绿 ≥ 黄 ≥ 红，
+           每根的活动区间由另外两根现算，所以拖到挨着邻居就拖不动了 —— 不会出现"黄色比绿色还慢"。
+           环的速度是<b>起圈那一刻</b>取走的：正在荡的那半圈不会因为你拖滑杆突然加速，改动从下一圈开始生效。
+           节拍那一组同时也管脚下脉冲几连发的节奏（参考那张表里就是一个数），波速那一组只管地面。
            二进制雨布在地图外围一圈圆柱壳上（不是参考里那面单侧幕布 —— 我们是轨道相机，
            转到哪一面它都该是背景）。参考页那层 UnrealBloom 辉光没带（派单禁 three/examples/），
-           比参考暗一档是预期。七格滑杆与两颗开关都实时生效，值同脉冲一起写回 settings.json 的 ground 那一组。</p>
+           比参考暗一档是预期。十二格滑杆与两颗开关都实时生效，值同脉冲一起写回 settings.json 的 ground 那一组
+           （六档那六个键名是 rippleSpeedIdle/Active/Alert 与 rippleIntervalIdle/Active/Alert）。</p>
       </section>
       <section class="pane" id="cat-mon">
         <div class="ph"><b>采集频率</b><span class="cnt">重画那一拍 / 抓帧那一轮，两格各管各的</span></div>
