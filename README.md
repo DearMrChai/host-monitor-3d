@@ -68,19 +68,21 @@ Register-ScheduledTask -TaskName 'hm3d-monitor-wall' -Action $act -Trigger $trg 
 chassis-geometry.mjs   机箱与网络设备几何（9 个模型函数 + screenContent helper），可移植层
 desk-geometry.mjs      外设与桌面组合（复用上面那份，没有第二份几何），可移植层
 src/three.mjs          全场景唯一的 THREE 来源（双 CDN 兜底在这里，两页与两份几何都 import 它）
-monitor-wall.html      监控墙原型（几何与 three 都是真 import，所以必须经 serve.mjs 打开）
+src/model.mjs          状态层：档位表 / 设备清单 / 分区 / 三档分级 / 可调参数表，整页只有一份（T5-2 从页面里搬出来的）
+monitor-wall.html      监控墙原型（几何、three、状态都是真 import，所以必须经 serve.mjs 打开）
 silhouette-shelf.html  剪影架原型（嵌内联副本，可 file:// 双击）
 serve.mjs              本地服务：清单 / 分区 / 设置 三个文件的读写 + SSH 探一帧（Windows 走 PowerShell，Linux 走 sh）
-check.mjs              一条命令的自检：语法（含 HTML 里那段模块体）→ 注入 → 几何校验
+check.mjs              一条命令的自检：语法（HTML 里那段模块体 + 根目录与 src/ 全部 .mjs）→ 注入 → 几何校验
 inject-geometry.mjs    把 chassis-geometry.mjs 灌进剪影架那一页（只有它还吃内联副本）
-verify-geometry.mjs    六节校验：① 监控墙内联已撤 + 剪影架可跑 / ② 内联 vs 源逐件比对 / 规格包围盒 / 同侧重合 / 正面射线 / 局部系复核
+verify-geometry.mjs    六节校验：① 监控墙 import 齐 + 状态层 node 侧可跑（8 台 / 4 区 / 8 档）+ 剪影架可跑 / ② 内联 vs 源逐件比对 / 规格包围盒 / 同侧重合 / 正面射线 / 局部系复核
 docs/                  尺寸与实测、移植指引、本地服务与数据源、立项前派单（留档）
 ```
 
 **改完 `.mjs` 必须 `npm run check`**：③ 那一节按 `docs/尺寸与实测.md` 的表逐件量包围盒，17 个模型全 OK 才算过；
-剪影架那一页嵌的是内联副本，不重灌就会跟源走散，② 就是抓这件事的（逐件世界 AABB 比对，9 个单机件必须全 0 差异）。
+剪影架那一页嵌的是内联副本，不重灌就会跟源走散，② 就是抓这件事的（逐件世界 AABB 比对，9 个单机件必须全 0 差异）；
+① 那一节现在还会在 node 里把 `src/model.mjs` 真 import 一遍，设备/分区/档位数不对就当场报错。
 
-## 四条不能破的口径
+## 五条不能破的口径
 
 1. **几何是纯函数**：顶层不碰 `document` / `window` / renderer，node 能直接 import；
    姿态由调用方的 `rotation` 决定，不写死在几何里。
@@ -90,6 +92,10 @@ docs/                  尺寸与实测、移植指引、本地服务与数据源
    不许为了"几档看着分得开"凑比例。唯一例外是路由器（含天线 144.2 ≠ 机身 56），文档里写明。
 4. **几何里一个颜色字面量都没有**：材质由调用方按 `mesh.name` 换 palette 键，
    页面上那些 hex 全是原型外壳，移植时重写。
+5. **状态只有一份，且在 `src/model.mjs`**：设备清单、分区、三档分级、可调参数表都从那里 import。
+   整份换绑（`devices = 新数组`）必须走导出的 `setDevices()`——导入方那侧的绑定是只读的，
+   直接写会在运行时抛 TypeError；改对象属性（`PULSE_SETTINGS.dotSeg = 320`）不用，照常写。
+   `ZONES` 刻意长驻同一个数组（`length = 0` 再 push），就是为了让各层抓着的引用不散。
 
 ## ⚠ 敏感文件，永远不进 git
 
@@ -98,7 +104,7 @@ docs/                  尺寸与实测、移植指引、本地服务与数据源
 **不要**把它们拷进任何分享包、截图或转发；新机器上跑 `serve.mjs` 会按 example 那套默认值生成一份干净的。
 
 `分区.json` 与 `设置.json` 也在 `.gitignore` 里，但理由不同 —— 它们**不含凭据**：默认值写在
-`monitor-wall.html` 里，这两份是"本机改过"的版本；跟进仓库的话，本地拖一次滑块、挪一次分区就把工作区弄脏了。
+`src/model.mjs` 里，这两份是"本机改过"的版本；跟进仓库的话，本地拖一次滑块、挪一次分区就把工作区弄脏了。
 部署时要调参数，直接改部署目录里的 `设置.json`。
 
 ## 现状与未验收项

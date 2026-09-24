@@ -24,7 +24,12 @@ const a = html.indexOf('<script type="module">');
 const body = html.slice(a + '<script type="module">'.length, html.indexOf('</script>', a));
 check('monitor-wall.html 模块体', body, '_check_wall.mjs');
 
-for (const f of [...readdirSync('.').filter((x) => x.endsWith('.mjs')), 'src/three.mjs']) {
+// 根目录 + src/ 下的 .mjs 全过一遍：拆出去的每一刀都自动进门，不用改这里
+const modFiles = [
+  ...readdirSync('.').filter((x) => x.endsWith('.mjs')),
+  ...readdirSync('src').filter((x) => x.endsWith('.mjs')).map((x) => 'src/' + x),
+];
+for (const f of modFiles) {
   if (f === 'check.mjs' || f.startsWith('_check_')) continue;
   check(f, readFileSync(f, 'utf8'), '_check_one.mjs');
 }

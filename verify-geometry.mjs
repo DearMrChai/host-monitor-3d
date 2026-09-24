@@ -105,14 +105,26 @@ const src1 = await import('./desk-geometry.mjs');
 const inl2 = await extract('silhouette-shelf.html', G2_NAMES);
 
 // 监控墙那页已经改真 import 了（2026-09-24），所以对它要验的事换了一条：内联副本必须彻底没了、
-// 且两条 import 在位。留着这条断言是因为 inject-geometry 以前写的是两个文件——手滑改回去要立刻看见。
+// 且 import 在位。T5-2 之后几何由 src/model.mjs 带进来，页面只 import model。
+// 留着这几条断言是因为 inject-geometry 以前写的是两个文件——手滑改回去要立刻看见。
 {
   const s = readFileSync('monitor-wall.html', 'utf8');
+  const m = readFileSync('src/model.mjs', 'utf8');
+  // 状态层能不能在 node 里跑起来、数对不对：这一行就是它自己的正对照（读到 0 就是没跑起来）
+  const model = await import('./src/model.mjs');
+  const rawThree = /await import\(["']three["']\)|^import \* as THREE from ["']three["']/m;
   console.log('① 监控墙：内联副本已撤', !s.includes('const G2 = (() => {'),
-    '| chassis import', s.includes('from "./chassis-geometry.mjs"'),
-    '| desk import', s.includes('from "./desk-geometry.mjs"'),
-    '| THREE 单一来源', s.includes('from "./src/three.mjs"') && !/await import\(["']three["']\)/.test(s),
-    '；剪影架：内联副本可跑，chassis', Object.keys(inl2).length, '个导出');
+    '| 页面 import model', s.includes('from "./src/model.mjs"'),
+    '| model import 两份几何', m.includes("from '../desk-geometry.mjs'") && m.includes("from '../chassis-geometry.mjs'"),
+    '| THREE 单一来源（页面/model 都不自己 import three）',
+    s.includes('from "./src/three.mjs"') && !rawThree.test(s) && !rawThree.test(m),
+    '\n   状态层 node 侧可跑：devices', model.devices.length, '台 / ZONES', model.ZONES.length,
+    '区 / TIERS', model.TIERS.length, '档 / PULSE_SETTINGS', Object.keys(model.PULSE_SETTINGS).length, '格',
+    '；剪影架内联副本可跑，chassis', Object.keys(inl2).length, '个导出');
+  if (model.devices.length !== 8 || model.ZONES.length !== 4 || model.TIERS.length !== 8) {
+    console.log('   ⚠ 状态层默认值变了：搬家搬坏了（应为 8 台 / 4 区 / 8 档）');
+    process.exitCode = 1;
+  }
 }
 
 console.log('\n② 内联 vs .mjs 逐项比对（包围盒 + 件数 + 每件世界 AABB）· 只剩剪影架这一份内联副本');
