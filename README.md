@@ -96,6 +96,8 @@ src/model.mjs          状态层：档位表 / 设备清单 / 分区 / 三档分
 src/format.mjs         读数换算层：数 → 屏上那行字（fmt / 色阶 / GB / 型号短名 / 厂商…），零依赖，三处共用（T5-4 刀1）
 src/ui.mjs             DOM 积木层：造节点 / 造一行滑杆 / 造一个开关按钮，只认参数不认状态（T5-4 刀2）
 src/dashboard.mjs      性能看板：一帧数据 → 右侧那排卡片（取数 + 渲染两层同住一个文件，见口径 7）（T5-4 刀3）
+src/fleet.mjs          陈列层：一台设备从"硬件档"到"桌上有东西 + 头顶有牌"的整条建造与染色（T5 刀5）
+src/ground.mjs         地面层：脚下脉冲 + 点阵涟漪地形 + 二进制雨 + 每拍负载档位（含它自己的自检钩子，T5 刀6）
 monitor-wall.html      监控墙原型（几何、three、状态都是真 import，所以必须经 serve.mjs 打开）
 silhouette-shelf.html  剪影架原型（嵌内联副本，可 file:// 双击）
 serve.mjs              本地服务：清单 / 分区 / 设置 三个文件的读写 + SSH 探一帧（Windows 走 PowerShell，Linux 走 sh）
