@@ -117,10 +117,10 @@ const SHAPE = (new Function('return ' + sm[1]))();
 ok('monitor 组两格都认（intervalMs 重画节拍 / probeEveryMs 抓帧间隔）',
   Object.keys(SHAPE.monitor).sort(), ['intervalMs', 'probeEveryMs']);
 ok('服务端读的就是这一格（不是另起一个键名）', src.includes('settings.monitor.probeEveryMs'), true);
-ok('服务端那一轮跳过的判据 = 藏起来的 / 没填地址 / 没填用户名（跟搬之前页面那条一致）',
-  src.includes('if (d.hidden || !d.host || !d.user) continue;'), true);
-ok('节拍有地板：手改文件写 10 ms 不会把这台机器变成 SSH 轰炸机',
-  [src.includes('const EVERY_FLOOR = 3000'), src.includes('EVERY_CEIL = 600000')], [true, true]);
+ok('服务端那一轮跳过的判据 = 藏起来的 / 没填地址 / 没填用户名（2026-09-26 改并行后是 filter 写法，判据同一条）',
+  src.includes('!d.hidden && d.host && d.user'), true);
+ok('节拍有地板：手改文件写 10 ms 不会把这台机器变成 SSH 轰炸机（下限 2026-09-26 随页面放开到 1 s）',
+  [src.includes('const EVERY_FLOOR = 1000'), src.includes('EVERY_CEIL = 600000')], [true, true]);
 
 // ---------- 页面这一侧：身份只有一格，两句文案各说各的实话 ----------
 // 为什么也要钉：这一刀的"观众不给齿轮、清单换 /api/hosts、双击不去抓"三件事全凭同一个布尔值。

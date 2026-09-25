@@ -432,14 +432,19 @@ function buildFrame(out) {
 // /api/probe 每来源限速：这一格等于"借这台服务往任意主机打 SSH"，不限速的话 OWNER 名单里
 // 一台机器被攻破 / 误配就成了跳板与扫描器（2026-09-26 评审）。正常用法打不满这一格：页面只在
 // "这台还没帧"时才补抓、连通性测试是人工点一下，轮询抓帧走服务端 runRound 根本不经过这里。
+// 清单内的 host = 监控目标本身：页面聚焦展开看板时对被看那台每 5s 抓一次（2026-09-26），
+// 属于合理高频，给宽桶（10s/6 次，5s 一拍 + 多台切换都不误伤）；清单外的 host = 借道任意主机打 SSH，
+// 维持严桶（10s/3 次），防 OWNER 机器被攻破后当跳板/扫描器。
 const PROBE_LIMIT = { windowMs: 10000, max: 3 };
+const PROBE_LIMIT_KNOWN = { windowMs: 10000, max: 6 };
 const probeBuckets = new Map();   // ip -> { n, resetAt }
-function probeRateOk(ip) {
+function probeRateOk(ip, knownHosts, host) {
+  const lim = host && knownHosts && knownHosts.has(host) ? PROBE_LIMIT_KNOWN : PROBE_LIMIT;
   const now = Date.now();
   let b = probeBuckets.get(ip);
   if (!b || now >= b.resetAt) { b = { n: 0, resetAt: now + PROBE_LIMIT.windowMs }; probeBuckets.set(ip, b); }
   b.n++;
-  return b.n <= PROBE_LIMIT.max;
+  return b.n <= lim.max;
 }
 
 // 口令可以为空：办公那几台 Windows 是"账号 user、不设密码"，空口令是它们的正常配置，
@@ -491,15 +496,21 @@ function probe({ host, user, pass, os }) {
 // 为什么必须搬：原来那圈 setTimeout 长在页面里，于是"谁的浏览器开着谁才喂这块墙"。放开"看"之后
 // 观众那台拿不到凭据（口令本来就不该出这台风），也就发不出探针 —— 朋友打开只会看到一整片"—"。
 // 搬进服务端之后：口令一次都不出这台机器，观众开页就有数，他那台笔记本的页关掉也不影响别人看。
-// 一轮的规矩跟搬之前页面里那条一模一样：该抓的机器按顺序各抓一帧、每台之间歇 1.2 s，
-// 抓完歇 settings.json 里那一格 probeEveryMs 再来下一轮（一轮本身实测 20~45 s，所以不能拿固定 setInterval 压着跑）。
+// 一轮的规矩（2026-09-26 改并行）：该抓的机器同时各抓一帧（Promise.all，一轮 ≈ 最慢那台），
+// 抓完歇 settings.json 里那一格 probeEveryMs 再来下一轮；页面展开看板时被看那台会额外每 5s 单抓一次。
 const frames = new Map();   // host -> { ok, frame, error, at }
-const ROUND_GAP_MS = 1200;      // 同一轮里两台之间，别同一瞬间捅四台
 const EVERY_DEFAULT = 15000;
-// 范围那张真表在页面的 MON_LIMITS；服务端这一夹只挡一件事：手改文件写出个"10 毫秒"把这台机器变成 SSH 轰炸机。
-const EVERY_FLOOR = 3000, EVERY_CEIL = 600000;
+// 范围那张真表在页面的 MON_LIMITS（下限已随 2026-09-26 放开到 1 s）；服务端这一夹只挡一件事：
+// 手改文件写出个"10 毫秒"把这台机器变成 SSH 轰炸机。
+const EVERY_FLOOR = 1000, EVERY_CEIL = 600000;
 let roundTimer = 0, roundRunning = false, roundNo = 0;
 let roundStartedAt = 0, roundFinishedAt = 0, roundEveryMs = EVERY_DEFAULT;
+// 无人访问停采（2026-09-26）：lastPullAt = 页面最近一次拉 /api/frames 的时刻（页面每 1s 拉一次，
+// 它就是"有没有人开着墙"的心跳）。超过 IDLE_MS 没人拉 → 停掉下一轮、机器一台都不 SSH；有人访问立即恢复。
+// HM_IDLE_MS 可覆盖（部署调参 / 测试用）。启动那一刻算"有人"（第一轮照跑）。
+const IDLE_MS = Number(process.env.HM_IDLE_MS) || 120000;
+let lastPullAt = Date.now();
+let roundIdle = false;
 
 function noteFrame(host, r) {
   frames.set(host, { ok: !!r.ok, frame: r.frame || null, error: r.ok ? "" : String(r.error || "").slice(0, 200),
@@ -529,7 +540,7 @@ async function readEveryMs() {
 }
 function roundInfo() {
   return { no: roundNo, running: roundRunning, startedAt: roundStartedAt, finishedAt: roundFinishedAt,
-    everyMs: roundEveryMs, hosts: frames.size,
+    everyMs: roundEveryMs, hosts: frames.size, idle: roundIdle,
     nextInMs: roundRunning ? null : Math.max(0, roundEveryMs - (Date.now() - roundFinishedAt)) };
 }
 async function runRound() {
@@ -537,22 +548,30 @@ async function runRound() {
   roundRunning = true; roundNo++; roundStartedAt = Date.now();
   try {
     const { list } = await load();
-    for (const d of list) {
-      // 藏起来的、以及没填全（地址 + 用户名）的不抓。
-      // "落在已关闭分区里"这一维**不在服务端复算**：那份判据长在页面（model.mjs 拿 zones.json 的 off 对着查），
-      // 这里再抄一份就是两个真源、早晚走散；多抓一台关掉的分区里的机器只是每轮一次 SSH，
-      // 而放出来那一刻它已经有现成的数，不用等下一轮。
-      if (d.hidden || !d.host || !d.user) continue;
+    // 并行抓（2026-09-26）：顺序挨台抓一轮 = 各台耗时之和（Windows 每台 10~11s + 台间 1.2s，
+    // 4 台一轮实测 20~35s）；Promise.all 后一轮 ≈ 最慢那台（Windows ~11s / linux ~1.6s）。
+    // 代价是同一瞬间同时 SSH 各台 —— 每台每轮仍只一次连接、频率没变，只是不再错峰；
+    // 真正的高频打扰来自"页面展开看板时对被看那台每 5s 单抓"，见 /api/probe 限速注释。
+    // 藏起来的、没填全（地址+用户名）的不抓；"落在已关闭分区里"这一维**不在服务端复算**：
+    // 那份判据长在页面（model.mjs 拿 zones.json 的 off 对着查），这里再抄一份就是两个真源、早晚走散。
+    const targets = list.filter((d) => !d.hidden && d.host && d.user);
+    await Promise.all(targets.map(async (d) => {
       let r;
       try { r = await probe({ host: d.host, user: d.user, pass: d.pass, os: d.os }); }
       catch (e) { r = { ok: false, error: "服务内部错误：" + String((e && e.message) || e) }; }
       noteFrame(d.host, r);
       logProbe(d.host, r.ok, r.ok ? framePeek(r.frame) : r.error);
-      await new Promise((res) => setTimeout(res, ROUND_GAP_MS));
-    }
+    }));
   } finally {
     roundRunning = false;
     roundFinishedAt = Date.now();
+    // 无人访问停采（2026-09-26）：最近 IDLE_MS 内没页面拉过 /api/frames（页面关着/压根没开）
+    // → 不再排下一轮，机器一台都不 SSH；有人访问 /api/frames 时立即恢复（见那个端点）。
+    if (Date.now() - lastPullAt >= IDLE_MS) {
+      roundIdle = true; roundTimer = 0;
+      console.log("[serve] 无人访问 " + Math.round((Date.now() - lastPullAt) / 1000) + "s，停止采集轮（有人打开页面即恢复）");
+      return;
+    }
     roundEveryMs = await readEveryMs();
     roundTimer = setTimeout(runRound, roundEveryMs);
   }
@@ -599,30 +618,40 @@ createServer(async (req, res) => {
     const { source, list } = await load();
     return send(res, 200, JSON.stringify({ list: scrub(list), source }));
   }
-  // 帧缓存：服务端每抓完一台就写这里，页面每 2 秒来取一趟（自己一发 SSH 都不发）。
+  // 帧缓存：服务端每抓完一台就写这里，页面每 1 秒来取一趟（自己一发 SSH 都不发）。
   // 响应里带上 rounds 那一格，是为了让"这块墙多久抓一轮、上一轮什么时候跑完"在浏览器里可读，
-  // 不用去问服务端日志。
+  // 不用去问服务端日志。idle = 本次访问之前服务端是否已因无人访问而停采（2026-09-26）。
   if (url.pathname === "/api/frames") {
     const out = {};
     for (const [host, r] of frames) out[host] = r;
-    return send(res, 200, JSON.stringify({ ok: true, rounds: roundInfo(), frames: out }));
+    // ④ 有人在看墙：更新心跳；若此前已停采（roundIdle），这一下立即恢复一轮（不等停掉的定时器）
+    lastPullAt = Date.now();
+    const wasIdle = roundIdle;
+    if (wasIdle) { roundIdle = false; runRound(); }
+    return send(res, 200, JSON.stringify({ ok: true, rounds: roundInfo(), frames: out, idle: wasIdle }));
   }
   // 手动催一轮（主人的"抓一帧"按钮与自测用）：把排队的那只定时器掐掉、立刻开跑。
   // 只回 roundInfo 不回数据 —— 数还是从 /api/frames 拿，两条路不必各写一份帧。
   if (url.pathname === "/api/round") {
+    lastPullAt = Date.now(); roundIdle = false;   // 手动催轮 = 有人在操作，取消闲置
     clearTimeout(roundTimer); roundTimer = 0;
-    runRound();   // 不 await：一轮 20~45 秒，HTTP 这一头不该挂着
+    runRound();   // 不 await：一轮并行 ~11s，HTTP 这一头不该挂着
     return send(res, 200, JSON.stringify({ ok: true, rounds: roundInfo() }));
   }
   if (url.pathname === "/api/probe") {
     if (req.method !== "POST") return send(res, 405, JSON.stringify({ ok: false, error: "只支持 POST" }));
-    // 限速闸（见 probeBuckets 那条注释）：每来源 10 秒限 3 次，超限 429 且不消耗请求体
-    if (!probeRateOk(peerOf(req))) return send(res, 429, JSON.stringify({ ok: false, error: "probe 请求过频（每来源 10 秒限 3 次），稍后再试" }));
     let raw = "";
     req.on("data", (c) => { raw += c; if (raw.length > 4096) req.destroy(); });
     req.on("end", async () => {
       let body = {};
       try { body = JSON.parse(raw); } catch { return send(res, 400, JSON.stringify({ ok: false, error: "请求体不是 JSON" })); }
+      // 限速闸（见 probeRateOk 注释）：得先解析出 host 才能分桶 —— 清单内的 host 给宽桶（页面聚焦
+      // 每 5s 抓被看那台），清单外维持严桶。超限 429，不碰 SSH。
+      const { list } = await load();
+      const knownHosts = new Set(list.filter((d) => d.host).map((d) => d.host));
+      if (!probeRateOk(peerOf(req), knownHosts, String(body.host || ""))) {
+        return send(res, 429, JSON.stringify({ ok: false, error: "probe 请求过频（清单内 10 秒限 6 次 / 其它 10 秒限 3 次），稍后再试" }));
+      }
       // 这条 try/catch 是必需的：以前 probe 里一个笔误（ssh2 未定义）在 Promise 里抛出，
       // 变成 unhandled rejection → 整个服务被自己带崩，页面只看到一个断掉的连接
       let r;
@@ -751,6 +780,6 @@ createServer(async (req, res) => {
   // 有没有私钥直接决定"没填口令的那几台"抓不抓得到，所以启动就得看得见这一格
   console.log("抓机器用的私钥：" + SSH_KEY_NOTE);
   // 第一轮不等定时器：服务一起来就把机器挨个抓一遍，谁先打开墙谁就先有数
-  console.log("抓帧：由本服务端自己转（页面只读缓存），每轮歇 " + await readEveryMs() + " ms");
+  console.log("抓帧：由本服务端自己转（页面只读缓存），每轮歇 " + await readEveryMs() + " ms；无人访问 " + Math.round(IDLE_MS / 1000) + "s 自动停采（HM_IDLE_MS 可调）");
   runRound();
 });

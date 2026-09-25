@@ -310,7 +310,7 @@ uiPaints.push(sliderRow(document.getElementById("monRows"), {
 // 抓帧间隔 = 那几台真机"多久被敲一次"。这一格才是"看板上的数会不会自己动"的开关：
 // 重画节拍再快，帧不更新也只是把同一份数重念一遍（他 2026-09-24 报的"数值纹丝不动"就是这个）。
 uiPaints.push(sliderRow(document.getElementById("monRows"), {
-  title: "抓帧间隔", hint: "隔多久把填了地址的机器各抓一帧（从上一轮抓完开始计时）。2026-09-24 起这一轮由跑服务的那台机器自己转，所有页面都关掉也照抓；改这一格从下一轮起生效。一轮实测 20~35 s，别调到 3 s 那档连轴转。",
+  title: "抓帧间隔", hint: "隔多久把填了地址的机器各抓一帧（从上一轮抓完开始计时）。抓帧由跑服务的那台机器自己转（并行抓所有机器，一轮≈最慢那台 ~11s）；改这一格从下一轮起生效。没人打开页面超过 2 分钟会自动停采；展开看板时被看那台会额外每 5s 抓一帧。下限 1 s，连轴转对真机是持续打扰，一般用默认 15 s 就行。",
   limits: MON_LIMITS.probeEveryMs,
   fmt: (v) => "每 " + (v / 1000).toFixed(0) + " 秒 1 轮",
   get: () => MONITOR_SETTINGS.probeEveryMs,

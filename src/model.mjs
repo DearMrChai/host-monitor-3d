@@ -95,9 +95,9 @@ const OS_LABEL = { win: "Windows", linux: "Linux" };
 //   intervalMs    = 看板与地面"这一拍"的节拍（重画面板、重算档位，纯本地，不碰网络）
 //   probeEveryMs  = 每隔多久把"填了地址"的机器各抓一帧（从上一轮抓完开始计时）。
 // 上限放到 60 s：他要过"10 秒一轮"，原来那格 5 s 封顶根本调不到（2026-09-24）。
-// probeEveryMs 默认 15 s = 一轮实测 20~35 s（四台机各 1.8~13 s，含每台之间那 1.2 s）之后再歇 15 s。
+// probeEveryMs 默认 15 s = 一轮（并行抓 ≈ 最慢那台 ~11s）之后再歇 15 s。下限 1 s（2026-09-26 放开）。
 const MONITOR_SETTINGS = { intervalMs: 3000, probeEveryMs: 15000 };
-const MON_LIMITS = { intervalMs: [200, 60000, 100], probeEveryMs: [3000, 600000, 1000] };
+const MON_LIMITS = { intervalMs: [200, 60000, 100], probeEveryMs: [1000, 600000, 1000] };
 const MS_KEY = "hm.mon.v1";
 
 // 脚下脉冲 + 地面点阵 + 二进制雨的全部可调值：真源只有这一份，滑杆、settings.json、

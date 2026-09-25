@@ -484,7 +484,7 @@ function probeDevice(d) {
 // 搬完之后：口令一次都不出 138 那台风，观众开页就有数，任何一台的页关掉都不影响别人看。
 // 取缓存的节拍跟"抓帧间隔"那一格**无关**：服务端每抓完一台就写缓存，页面每 2 秒去看一眼。
 // 那是一份内存里的 Map，比一次 SSH 便宜三个数量级，也让"改了间隔"这件事不需要页面参与。
-const PULL_MS = 2000;
+const PULL_MS = 1000;   // 帧一到 1s 内上墙（2026-09-26 提速）
 let pullTimer = 0, lastRounds = null, lastPullErr = "";
 async function pullFrames() {
   try {
@@ -544,6 +544,17 @@ async function bootProbe() {
   startPuller();
   sync();
 }
+// ---------- 聚焦加速（2026-09-26）：看板展开时，对被看那台每 5s 抓一帧 ----------
+// 目标：展开后数值"活"起来（linux ~7s/帧、Windows ~11s/帧，受探测时长限制）；收起（perfDev=null）自动停。
+// 只主人生效：/api/probe 是 owner 专属，观众发了会被 403 记成"抓不到"（观众本来就只该看主人抓好的缓存）。
+// 定时器常驻但空转开销可忽略；probeFlights 去重保证同一台不并发两把 SSH；power 关机的跳过。
+const FOCUS_MS = 5000;
+setInterval(async () => {
+  const d = perfDev;
+  if (!d || isViewer() || !liveOf(d) || !d.host || !d.user || !d.power) return;
+  await probeDevice(d);
+  if (perfDev === d) { paintZoneColors(); refreshPerfHead(); }
+}, FOCUS_MS);
 function showTip(html) {
   tipEl.innerHTML = html;
   tipEl.hidden = false;
