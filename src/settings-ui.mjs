@@ -15,7 +15,7 @@ import { fmt, clampv, pctFmt, mmFmt } from "./format.mjs";
 import { el, mini, fieldRow, textField, sliderRow, bindOnOff } from "./ui.mjs";
 import { perfDev, hidePerf, refreshPerfHead } from "./dashboard.mjs";
 import { rebuild, applyState, holderOf } from "./fleet.mjs";
-import { setPulseSetting, setPulseEnabled, setRippleEnabled, setRainEnabled, setGradeSetting } from "./ground.mjs";
+import { setPulseSetting, setPulseEnabled, setRippleEnabled, setRainEnabled, setRainFollowLoad, setGradeSetting } from "./ground.mjs";
 
 // 页面递进来的三样动作：探针（抓一帧 + 把结果写在浮层里）、节拍 setter（改了任何一格节拍都要重排它的定时器）、
 // 相机（点设备行那个"位置"链接要聚焦、开弹窗要先收掉钉住的牌）。声明成 let 是因为它们只在点击时被调，
@@ -404,6 +404,9 @@ uiPaints.push(sliderRow(document.getElementById("rainRows"), {
 // 涟漪 / 雨两颗独立开关：跟脉冲开关同一种按钮长相，但各管各的
 uiPaints.push(bindOnOff("rippleOn", "涟漪", () => PULSE_SETTINGS.rippleEnabled, setRippleEnabled));
 uiPaints.push(bindOnOff("rainOn", "雨", () => PULSE_SETTINGS.rainEnabled, setRainEnabled));
+// #4 的开关单独立一颗，不并进"雨 开/关"：他要看的是"柱子跟着忙闲变"这一维本身好不好，
+// 而不是只能连雨一起关。两颗按钮各管一件事，出问题时报障也分得开。
+uiPaints.push(bindOnOff("rainLoadOn", "跟忙闲", () => PULSE_SETTINGS.rainFollowLoad, setRainFollowLoad));
 
 // ---------- 设置 ↔ 本地 settings.json（2026-09-23：从"只活在浏览器里"改成"文件是真源"）----------
 // 三组：pulse（脉冲）/ ground（地面与雨）/ monitor（采集频率）。键名跟代码里一模一样 —— 不另起一套中文键，
@@ -437,6 +440,7 @@ function settingsToFile() {
       rainBrightness: PULSE_SETTINGS.rainBrightness,
       rainCount: PULSE_SETTINGS.rainCount,
       rainDotMm: PULSE_SETTINGS.rainDotMm,
+      rainFollowLoad: PULSE_SETTINGS.rainFollowLoad,
     }, gradeValues()),   // 六档波速/节拍：键名与夹好的值都由 model 那张 GRADE_KEYS 表给，这里不重抄
     monitor: { intervalMs: MONITOR_SETTINGS.intervalMs, probeEveryMs: MONITOR_SETTINGS.probeEveryMs },
   };
@@ -465,6 +469,7 @@ function applySettings(o) {
   if (g && typeof g === "object") {
     if (typeof g.rippleEnabled === "boolean" && g.rippleEnabled !== PULSE_SETTINGS.rippleEnabled) { setRippleEnabled(g.rippleEnabled, true); changed = true; }
     if (typeof g.rainEnabled === "boolean" && g.rainEnabled !== PULSE_SETTINGS.rainEnabled) { setRainEnabled(g.rainEnabled, true); changed = true; }
+    if (typeof g.rainFollowLoad === "boolean" && g.rainFollowLoad !== PULSE_SETTINGS.rainFollowLoad) { setRainFollowLoad(g.rainFollowLoad, true); changed = true; }
     for (const k of ["rippleHeight", "rippleThickness", "rippleBrightness", "dotSeg", "dotSizeMm",
       "rainBrightness", "rainCount", "rainDotMm"]) {
       const lim = PULSE_LIMITS[k], v = Number(g[k]);

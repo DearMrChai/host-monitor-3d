@@ -31,6 +31,7 @@ try {
   if (typeof saved.enabled === "boolean") PULSE_SETTINGS.enabled = saved.enabled;
   if (typeof saved.rippleEnabled === "boolean") PULSE_SETTINGS.rippleEnabled = saved.rippleEnabled;
   if (typeof saved.rainEnabled === "boolean") PULSE_SETTINGS.rainEnabled = saved.rainEnabled;
+  if (typeof saved.rainFollowLoad === "boolean") PULSE_SETTINGS.rainFollowLoad = saved.rainFollowLoad;
   for (const k in PULSE_LIMITS) if (Number.isFinite(saved[k])) setPulseSetting(k, saved[k], true);
   applyGradeValues(saved);   // 六档波速/节拍住在 STATES 里，不在 PULSE_LIMITS 那张表上，所以单独走一次
 } catch (e) { /* 读不到就用默认值 */ }
@@ -347,6 +348,22 @@ const RAIN_CAP = 6400;
 // 再快就是电视雪花，再慢跟不换字没区别。区间内随机，免得整场在同一帧一起翻脸。
 const RAIN_FLIP_MIN = 0.25, RAIN_FLIP_MAX = 0.9;
 const rainFlipWait = () => RAIN_FLIP_MIN + Math.random() * (RAIN_FLIP_MAX - RAIN_FLIP_MIN);
+// ---------- #3（2026-09-25 他说"开 3/4"）：雨成柱 + 拖尾 ----------
+// ⚠ 参考里既没有柱也没有尾：DigitalRainBackground 就是 800 颗各自随机布点、各自下落（外加 150 颗光斑），
+// 所以这一节是**他点名的扩展**，不是把参考抄回来 —— 下面四颗口径（每列几行 / 行距系数 / 拖尾范围 / 逐行衰减）
+// 参考给不出依据，只能自己定，并且一律不新增滑杆：柱子有多少根仍由 rainCount 管，一颗多大仍由 rainDotMm 管。
+const RAIN_ROWS = 20;                     // 一列占几行（= 几颗）。容量 6400 颗因此是 320 根柱子
+const RAIN_COLS = RAIN_CAP / RAIN_ROWS;   // 整除，不整除就会有一截 buffer 永远画不到（verify-rain 钉这一条）
+const RAIN_TRAIL_MIN = 6;                 // 一列最少亮几行：再短就不成"尾"，只是两颗挨着
+const RAIN_ROW_GAP_K = 1.15;              // 行距 = 字径 × 这个系数：字挨着字，但上下两行不叠成一坨
+const RAIN_FADE = 0.8;                    // 每往上走一行乘这个。领头那颗（最下面）= 1.0，即他拧的那个亮度
+// ---------- #4（同日）：雨跟着机群忙闲变 ----------
+// 两维各一条线段，端点写在这里而不是散在乘法里：读数那一格报的就是这两个数组，
+// 所以"屏上现在的倍率"和"声明的量程"永远是同一份数（同当年"台数被抄了三份"那笔账的反面写法）。
+const RAIN_LOAD_SPEED = [0.75, 1.5];   // 空载 / 满载时柱子的下落速度倍率（闲 = 比参考慢一点，忙 = 两倍速）
+const RAIN_LOAD_BRIGHT = [0.8, 1.0];   // 同上，亮度。上限钉在 1.0：乘的是他手里那格 rainBrightness，
+                                       // 联动只能往下让 —— 他拧的数必须是天花板，否则那格就白拉满了
+const loadK = (r, v) => r[0] + (r[1] - r[0]) * v;
 function rainGlyphTexture() {
   const c = document.createElement("canvas");
   c.width = 128 * RAIN_GLYPHS.length; c.height = 128;   // 横排图集：一格一个字，格宽 = 高度
@@ -363,29 +380,50 @@ function rainGlyphTexture() {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+// #4 的输入：这一拍"机群有多忙"（0~1），只算**真抓到一帧**的那几台。
+// 三条口径都在这个函数里断，所以逐条写下来：
+// · 屏幕上没有的机子（收起 / 整区关闭 / 关机）不投票 —— 跟 stepLoads 同一类条件，两处不许分叉；
+// · 没有帧就没有数：w.pct 是 null 的直接跳过（#35"没抓到帧不编档位"那条的延续），道具那台的本地游走也不算证据；
+// · 一台都取不到数 → 返回 null，由调用方回落成"不乘"。这一格绝不能回落成 0：
+//   0 会被读成"整场空载"，雨当场慢下来暗一档，症状跟"联动坏了"一模一样，而屏上没人看得出差别。
+function fleetLoad01() {
+  let sum = 0, n = 0;
+  for (const d of devices) {
+    if (d.hidden || zoneOffOf(d) || !d.power || !d.frame) continue;
+    const w = loads.get(d.id);
+    if (!w || typeof w.pct !== "number") continue;
+    sum += w.pct; n++;
+  }
+  // 带着缓存帧的离线机按最后一帧算：雨读的必须就是脚下脉冲与涟漪读的那一份 loads，
+  // 两处各定一套"多忙"的话，屏上会出现"机箱红、雨却慢"这种对不上账的场面
+  return n ? { load01: clampv(sum / n / 100, 0, 1), 台数: n } : null;
+}
 class BinaryRain {
   constructor(sc) {
     const n = RAIN_CAP;
-    const pos = new Float32Array(n * 3);
-    this.speeds = new Float32Array(n);
+    this.pos = new Float32Array(n * 3);
+    this.tint = new Float32Array(n * 3);  // 拖尾：每行的亮度乘数（材质色 × 它），0 = 这一行彻底不发光
     this.glyph = new Float32Array(n);   // 这一颗现在用图集里第几格（着色器读的就是它）
     this.flip = new Float32Array(n);    // 还有多久换字（秒）
-    for (let i = 0; i < n; i++) {
-      this._respawn(pos, i, true);
-      this.glyph[i] = (Math.random() * RAIN_GLYPHS.length) | 0;
-      this.flip[i] = rainFlipWait();
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute("aGlyph", new THREE.BufferAttribute(this.glyph, 1));
-    this.n = -1;   // -1 = 逼第一次 syncCount 一定落进"改 drawRange"那条路（同点阵 syncDots 的写法）
+    // "成柱"改的不是长相，是**状态归谁**：角度 / 半径 / 头位置 / 速度 / 拖尾长从"每颗一份"变成"每列一份"，
+    // 一列的行因此永远对齐着落，不会再出现参考那样东一颗西一颗。
+    this.cAng = new Float32Array(RAIN_COLS);
+    this.cRad = new Float32Array(RAIN_COLS);
+    this.head = new Float32Array(RAIN_COLS);    // 领头那颗（最下面、最亮）的 y
+    this.cSpeed = new Float32Array(RAIN_COLS);
+    this.trail = new Uint8Array(RAIN_COLS);     // 这一列亮着几行
     this.flips = 0;                  // 累计换字次数：两次读数之差就是"屏上真的在换字"的取证
+    // #4 的三格本帧值：先给"没联动"的初值，免得第一帧之前读到 undefined（读数一旦是 undefined，
+    // 那既不能算红也不能算绿，等于这一格没测）
+    this.speedK = 1; this.brightK = 1; this.loadN = 0; this.load01 = null;
     // fog:false：雨在 40~54 m 外，吃我们那条线性雾（20~46 m）会被吞成灰，背景层就该一直在
     // 粒径取 PULSE_SETTINGS.rainDotMm（默认 720 = 参考的 1.8 单位 × RAIN_S，换算只在默认值那一次做）；
     // 每帧在 syncSize() 里再对一次，所以滑杆一拖就变，不用重建材质。
+    // vertexColors:true = 拖尾走 three 自己那套管子（points 片元里 diffuseColor.rgb *= vColor），
+    // 亮度乘数因此是"一个颜色属性 buffer"，不必为尾梢新写一个 ShaderMaterial。
     this.rainMat = new THREE.PointsMaterial({ color: 0x0088ff, size: PULSE_SETTINGS.rainDotMm, map: rainGlyphTexture(),
       transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
-      sizeAttenuation: true, fog: false });
+      sizeAttenuation: true, fog: false, vertexColors: true });
     // 每颗取图集中属于它的那一格。只改采样坐标这一句：粒径 / 亮度 / 加法混合 / pixelRatio 那套管子
     // 仍走 PointsMaterial 自己的（重写成 ShaderMaterial 就得自己算 scale = 画布高 × 像素比，多一处会跟渲染器走散的地方）。
     this.rainMat.onBeforeCompile = (sh) => {
@@ -401,6 +439,22 @@ class BinaryRain {
     // three 按"材质类型 + 参数"缓存 program，不看 onBeforeCompile 里改了什么。不给键，地面点阵那颗
     // PointsMaterial 会跟它撞成同一份程序（症状 = 雨对了、地上的点开始串字）。
     this.rainMat.customProgramCacheKey = () => "hm-rain-atlas";
+    for (let c = 0; c < RAIN_COLS; c++) {
+      // 绕壳均分 + 每根各抖一点：整整齐齐的 320 等分会在屏幕上排出一圈刻度，看着像栏杆不像雨
+      this.cAng[c] = (c + Math.random()) * Math.PI * 2 / RAIN_COLS;
+      this.cRad[c] = RAIN_R0 + Math.random() * (RAIN_R1 - RAIN_R0);
+      this._respawnCol(c, true);
+      for (let j = 0; j < RAIN_ROWS; j++) {
+        const i = c * RAIN_ROWS + j;
+        this.glyph[i] = (Math.random() * RAIN_GLYPHS.length) | 0;
+        this.flip[i] = rainFlipWait();
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(this.tint, 3));
+    geo.setAttribute("aGlyph", new THREE.BufferAttribute(this.glyph, 1));
+    this.n = -1;   // -1 = 逼第一次 syncCount 一定落进"改 drawRange"那条路（同点阵 syncDots 的写法）
     this.rain = new THREE.Points(geo, this.rainMat);
     sc.add(this.rain);
     this.syncCount();   // 一上来就按滑杆那格画，别先把 3200 颗满容量画一帧
@@ -459,20 +513,39 @@ class BinaryRain {
       最亮格光比: +(Math.min(...lum) / Math.max(...lum)).toFixed(3), 峰值: peak.map(Math.round) };
     return this._ink;
   }
-  _respawn(arr, i, anywhere) {
-    const a = Math.random() * Math.PI * 2;
-    const r = RAIN_R0 + Math.random() * (RAIN_R1 - RAIN_R0);
-    arr[i * 3] = Math.cos(a) * r;
-    // anywhere = 首帧铺满整柱；之后只在柱顶以上 20 单位（参考原样）重生，免得眼前凭空冒字
-    arr[i * 3 + 1] = anywhere ? Math.random() * RAIN_TOP : RAIN_TOP + Math.random() * 20 * RAIN_S;
-    arr[i * 3 + 2] = Math.sin(a) * r;
-    this.speeds[i] = (3 + Math.random() * 5) * RAIN_S;   // 参考 3~8 单位/秒 → 毫米/秒
+  // 行距跟着字径走：柱子"有多长"是拖尾行数 × 一行多大，两个都已经是他手里那两格滑杆的产物，
+  // 所以这里不再新加第三个旋钮 —— 字调大，柱子整体变长，行与行仍然不叠。
+  rowGap() { return this.rainMat.size * RAIN_ROW_GAP_K; }
+  // 一列的 XZ 是定死的（成柱 = 整列共用一个角度和半径，只有 y 在走），所以这里只在"重生"和"行距变了"时被叫。
+  _layout(c) {
+    const gap = this.rowGap(), base = c * RAIN_ROWS;
+    const x = Math.cos(this.cAng[c]) * this.cRad[c], z = Math.sin(this.cAng[c]) * this.cRad[c];
+    for (let j = 0; j < RAIN_ROWS; j++) {
+      const o = (base + j) * 3;
+      this.pos[o] = x;
+      this.pos[o + 1] = this.head[c] + j * gap;
+      this.pos[o + 2] = z;
+    }
+  }
+  // 一整列一起重生。anywhere = 首帧把头发在可见带内（不然开页面时上半截是空的）；
+  // 之后领头那颗落到柱顶以上、**并且把整条尾巴也抬出去**（参考那句 `80 + rand*20` 是单颗的口径，
+  // 柱子要是不把尾长算进去，半条尾巴会在屏幕上凭空冒出来）。
+  _respawnCol(c, anywhere) {
+    this.trail[c] = RAIN_TRAIL_MIN + ((Math.random() * (RAIN_ROWS - RAIN_TRAIL_MIN + 1)) | 0);
+    this.cSpeed[c] = (3 + Math.random() * 5) * RAIN_S;   // 参考 3~8 单位/秒 → 毫米/秒（口径没动，只是从每颗挪到每列）
+    const tail = (this.trail[c] - 1) * this.rowGap();
+    this.head[c] = anywhere ? RAIN_BOTTOM + Math.random() * (RAIN_TOP - RAIN_BOTTOM)
+      : RAIN_TOP + tail + Math.random() * 20 * RAIN_S;
+    this._layout(c);
   }
   // "更密"这一格落地：滑杆写的是颗数，这里只把画出去的数量挪一挪（容量在构造时就配满）。
   // 钳到 RAIN_CAP 是防手改 settings.json 写个 99999 —— drawRange 超过顶点数，WebGL 会照着 buffer
   // 边界外的内存画，报不报错看运气，而屏上先花。
+  // ⚠ 往下取整到**整列**：顶点是"列 × 行"排的（i = c*RAIN_ROWS + j），切在半列上 = 屏上出现断柱子，
+  // 上半截有尾、领头那颗没了，一眼就是坏掉的样子。颗数滑杆因此管的是"几根柱子"。
   syncCount() {
-    const n = Math.max(0, Math.min(RAIN_CAP, Math.round(Number(PULSE_SETTINGS.rainCount) || 0)));
+    const want = Math.max(0, Math.min(RAIN_CAP, Math.round(Number(PULSE_SETTINGS.rainCount) || 0)));
+    const n = want - (want % RAIN_ROWS);
     if (n === this.n) return false;
     this.n = n;
     this.rain.geometry.setDrawRange(0, n);
@@ -481,38 +554,64 @@ class BinaryRain {
   // "字画多大"这一格：他报"都是 0"之后量出来的结论是——不是亮度差（1 的有效光 = 0 的 76.5 %，
   // 改字色只买到 0.768，见 atlasBalance），是"一颗字在墙上只有约 10 px 高，1 的那根竖笔不到一个像素"。
   // 所以能救的那一维是他手里的"多大"，而它归他判：这里只管把滑杆那一格钳进量程后落到材质上。
+  // 字径一改行距就跟着改（行距 = 字径 × 系数），所以这里必须把每列的顶点重排一次，
+  // 否则屏幕上是一颗变大的字压在上一颗上、柱子却还按旧行距站着。
   syncSize() {
     const lim = PULSE_LIMITS.rainDotMm;
     const v = Math.max(lim[0], Math.min(lim[1], Number(PULSE_SETTINGS.rainDotMm) || lim[0]));
     if (v === this.rainMat.size) return false;
     this.rainMat.size = v;
+    for (let c = 0; c < RAIN_COLS; c++) this._layout(c);
     return true;
+
   }
   update(delta) {
     const gb = PULSE_SETTINGS.rainEnabled ? PULSE_SETTINGS.rainBrightness : 0;
-    this.rainMat.opacity = gb;
-    this.bokehMat.opacity = gb * 0.8;
+    // #4：这一帧雨该按"多忙"来跑。null = 不乘（开关关着，或机群里一台带帧的都没有）——
+    // 那时屏上就是 #3 原来的样子，两格倍率都是 1.0，看得见也读得出（见 rainBounds 的"忙闲联动"）。
+    const ld = PULSE_SETTINGS.rainEnabled && PULSE_SETTINGS.rainFollowLoad ? fleetLoad01() : null;
+    const ls = ld ? loadK(RAIN_LOAD_SPEED, ld.load01) : 1;
+    this.speedK = ls; this.brightK = ld ? loadK(RAIN_LOAD_BRIGHT, ld.load01) : 1;
+    this.loadN = ld ? ld.台数 : 0;
+    this.load01 = ld ? ld.load01 : null;
+    this.rainMat.opacity = gb * this.brightK;
+    this.bokehMat.opacity = gb * 0.8 * this.brightK;   // 光斑跟着退：雨区整体变暗才是"这一片闲下来了"，只暗一半看着像坏了
     this.syncSize();
     this.syncCount();   // 关着也同步：那一格数字改了，屏上重新开雨时画的颗数就得跟着
     if (!PULSE_SETTINGS.rainEnabled) return;   // 关着 = 不透明度 0 且粒子冻住，省掉每帧上千次写
-    const pos = this.rain.geometry.attributes.position.array;
+    const pos = this.pos, tint = this.tint, gap = this.rowGap();
     const gn = RAIN_GLYPHS.length;
     let glyphDirty = false;
-    for (let i = 0; i < this.n; i++) {
-      pos[i * 3 + 1] -= this.speeds[i] * delta;
-      if (pos[i * 3 + 1] < RAIN_BOTTOM) this._respawn(pos, i, false);
-      this.flip[i] -= delta;
-      if (this.flip[i] <= 0) {
-        // 换字得真换出一个别的：偏移取 1 ~ gn-1 再取模，所以只有两个字符时它必定翻转
-        // （照着参考那句掷硬币的话写，会有一半时间"换"完还是同一个字，抖一下就白丢了）
-        this.glyph[i] = (this.glyph[i] + 1 + ((Math.random() * (gn - 1)) | 0)) % gn;
-        this.flip[i] = rainFlipWait();
-        this.flips++;
-        glyphDirty = true;
+    // 按列走：一颗列内所有行都在这一格里落位，所以"整列一起下落"是结构本身，不需要额外对齐。
+    for (let c = 0; c * RAIN_ROWS < this.n; c++) {
+      const base = c * RAIN_ROWS, L = this.trail[c];
+      this.head[c] -= this.cSpeed[c] * ls * delta;
+      // 等到**尾巴**也落到柱底以下才挪：领头那颗一到底就重生，屏上会看见半条柱子瞬间消失又从顶上冒出来
+      if (this.head[c] + (L - 1) * gap < RAIN_BOTTOM) this._respawnCol(c, false);
+      let b = 1;   // 领头那颗 = 1.0 = 他手里那格亮度原样；往上逐行乘 RAIN_FADE，尾梢自然淡出
+      for (let j = 0; j < RAIN_ROWS; j++) {
+        const i = base + j, o = i * 3;
+        pos[o + 1] = this.head[c] + j * gap;
+        // 超出这列尾长的行把亮度写成 0：加法混合下"颜色 × 0"就是彻底不发光，
+        // 于是长短不一的柱子共用同一套材质、同一份 buffer，也不必把行藏到 drawRange 外面去。
+        const v = j < L ? b : 0;
+        tint[o] = v; tint[o + 1] = v; tint[o + 2] = v;
+        b *= RAIN_FADE;
+        this.flip[i] -= delta;
+        if (this.flip[i] <= 0) {
+          // 换字得真换出一个别的：偏移取 1 ~ gn-1 再取模，所以只有两个字符时它必定翻转
+          // （照着参考那句掷硬币的话写，会有一半时间"换"完还是同一个字，抖一下就白丢了）
+          this.glyph[i] = (this.glyph[i] + 1 + ((Math.random() * (gn - 1)) | 0)) % gn;
+          this.flip[i] = rainFlipWait();
+          this.flips++;
+          glyphDirty = true;
+        }
       }
     }
     this.rain.geometry.attributes.position.needsUpdate = true;
+    this.rain.geometry.attributes.color.needsUpdate = true;
     if (glyphDirty) this.rain.geometry.attributes.aGlyph.needsUpdate = true;
+
     const bpos = this.bokeh.geometry.attributes.position.array;
     for (let i = 0; i < this.bAng.length; i++) {
       this.bAng[i] += this.bW[i] * delta;
@@ -528,6 +627,12 @@ class BinaryRain {
 let binaryRain = null;   // 同上
 export function setRainEnabled(on, quiet) {
   PULSE_SETTINGS.rainEnabled = !!on;
+  try { localStorage.setItem(PS_KEY, pulseStore()); } catch (e) { /* 同上 */ }
+  if (!quiet) touchSettings();
+}
+// #4 那个开关：跟"雨 开/关"同一个落盘规矩（布尔不进 PULSE_LIMITS，所以 setPulseSetting 管不到它）。
+export function setRainFollowLoad(on, quiet) {
+  PULSE_SETTINGS.rainFollowLoad = !!on;
   try { localStorage.setItem(PS_KEY, pulseStore()); } catch (e) { /* 同上 */ }
   if (!quiet) touchSettings();
 }
@@ -583,10 +688,15 @@ function stepRipples(t) {
 // 差值 > 0 才算"字真的在换"，而雨开关关掉之后它必须不再涨（同一条路上的负对照）。
 function rainBounds() {
   const p = binaryRain.rain.geometry.attributes.position.array;
+  const t = binaryRain.rain.geometry.attributes.color.array;
   const n = binaryRain.n;
   const dist = new Array(RAIN_GLYPHS.length).fill(0);
-  let r0 = Infinity, r1 = -Infinity, y0 = Infinity, y1 = -Infinity, ySum = 0;
+  let r0 = Infinity, r1 = -Infinity, y0 = Infinity, y1 = -Infinity, ySum = 0, lit = 0;
+  let tMin = RAIN_ROWS, tMax = 0;
   for (let i = 0; i < n; i++) {
+    if (t[i * 3] === 0) continue;   // 只统计**亮着**的行：拖尾之外的行位置照样排、亮度是 0，
+                                    // 把它们算进来就读出一个"看不出柱子"的平均数
+    lit++;
     dist[binaryRain.glyph[i]]++;
     const k = i * 3;
     const rr = Math.hypot(p[k], p[k + 2]);
@@ -596,9 +706,44 @@ function rainBounds() {
     if (p[k + 1] > y1) y1 = p[k + 1];
     ySum += p[k + 1];
   }
+  const gap = binaryRain.rowGap();
+  let colXZOff = 0;    // 一根柱子内部各行 XZ 的最大偏离：0 = 各行站在同一条铅垂线上（= 成柱）
+  let gapJitter = 0;   // 相邻两行间距与"应有行距"的最大偏差：0（在 float32 的位值余量内）= 各行等距
+  for (let c = 0; c * RAIN_ROWS < n; c++) {
+    if (binaryRain.trail[c] < tMin) tMin = binaryRain.trail[c];
+    if (binaryRain.trail[c] > tMax) tMax = binaryRain.trail[c];
+    // "成柱"的机器判据：整列共用一个角度和半径（XZ 一模一样），行与行等距抬升。
+    // 这两格一旦明显 > 0，屏上就是参考那种各自随机的散点，不是柱子 —— 变异实验里"行距改成每颗随机"就是拿它们抓红的。
+    const base = c * RAIN_ROWS;
+    const x0 = p[base * 3], z0 = p[base * 3 + 2];
+    let py = null;
+    for (let j = 0; j < RAIN_ROWS; j++) {
+      const k = (base + j) * 3, y = p[k + 1];
+      const ox = Math.abs(p[k] - x0), oz = Math.abs(p[k + 2] - z0);
+      if (ox > colXZOff) colXZOff = ox;
+      if (oz > colXZOff) colXZOff = oz;
+      if (py !== null) {
+        const d = Math.abs(y - py - gap);
+        if (d > gapJitter) gapJitter = d;
+      }
+      py = y;
+    }
+  }
   return { 雨滴: n, 雨滴容量: p.length / 3,
     // GPU 被告知画几颗（drawRange.count）：这一格和上面那格不等 = 滑杆写进了设置但没接到几何上
     画到第几颗: binaryRain.rain.geometry.drawRange.count,
+    // #3 的取证：颗数有没有真按整列切（在画列数 × 每列几行 ≠ 雨滴 = 屏上有断柱子）、
+    // 一根柱子在屏上到底多长、尾梢比领头暗到几成（这几样都不需要眼睛）
+    在画列数: n / RAIN_ROWS, 每列几行: RAIN_ROWS, 亮着的行: lit,
+    拖尾行: n ? [tMin, tMax] : null, 行距mm: Math.round(gap), 最长柱mm: Math.round(tMax * gap),
+    尾梢亮度比: n ? +Math.pow(RAIN_FADE, tMax - 1).toFixed(3) : null,
+    列内XZ偏离mm: +colXZOff.toFixed(3), 行距偏差mm: +gapJitter.toFixed(3),
+    // #4 的取证：这一帧到底乘了多少、是拿几台的数乘出来的。"取数台数 = 0"就说明联动其实没在工作
+    // （全场没帧），此时两格倍率必须都是 1 —— 这一格配的就是那个负对照。
+    忙闲联动: { 开关: PULSE_SETTINGS.rainFollowLoad, 取数台数: binaryRain.loadN,
+      机群负载: binaryRain.load01 === null ? null : +binaryRain.load01.toFixed(3),
+      速度倍: +binaryRain.speedK.toFixed(3), 亮度倍: +binaryRain.brightK.toFixed(3),
+      声明量程: { 速度: RAIN_LOAD_SPEED, 亮度: RAIN_LOAD_BRIGHT } },
     壳半径mm: [RAIN_R0, RAIN_R1], 雨柱高mm: RAIN_TOP,
     字径mm: binaryRain.rainMat.size, 最慢mm每秒: 3 * RAIN_S, 最快mm每秒: 8 * RAIN_S,
     雨半径mm: [Math.round(r0), Math.round(r1)], 雨高度mm: [Math.round(y0), Math.round(y1)],

@@ -179,7 +179,7 @@ const SET_SHAPE = {
     upParticleBrightness: "num", travelK: "num" },
   ground: { rippleEnabled: "bool", rippleHeight: "num",
     rippleThickness: "num", rippleBrightness: "num", dotSeg: "num", dotSizeMm: "num", rainEnabled: "bool",
-    rainBrightness: "num", rainCount: "num", rainDotMm: "num",
+    rainBrightness: "num", rainCount: "num", rainDotMm: "num", rainFollowLoad: "bool",
     // ⚠ 新增一颗地面参数 = 三处都要点名，少一处就每次都静默丢掉那一格（同 probeEveryMs 那个缺陷）：
     // 这里的形状表、settings-ui.mjs 的写文件载荷、以及那边"读文件"那一串键名。verify-rain.mjs 对这三处的账。
     // 三档波速与三档节拍（2026-09-24 他裁的六根关联滑杆）。原来那一格 rippleSpeed 已经不存了：
