@@ -11,7 +11,7 @@ import { TIERS, tierOf, mkDev, seq, devices, setDevices, ZONES, ZONE_FIELD, ZONE
   ZONE_KEY_RE, ZONE_MAX, zoneKeyOf, zoneOf, OS_LABEL, MONITOR_SETTINGS, MON_LIMITS, MS_KEY,
   PULSE_SETTINGS, PULSE_LIMITS, PS_KEY, liveOf, ACCESS, zoneOffOf,
   STATES, GRADE_KEYS, gradeBounds, setGrade, gradeValues,
-  ROSTER, setRosterSource, rosterBadge } from "./model.mjs";
+  ROSTER, setRosterSource, rosterBadge, rosterIsProps, rosterPropsNote } from "./model.mjs";
 import { fmt, clampv, pctFmt, mmFmt } from "./format.mjs";
 import { el, mini, fieldRow, textField, sliderRow, bindOnOff } from "./ui.mjs";
 import { perfDev, hidePerf, refreshPerfHead } from "./dashboard.mjs";
@@ -639,8 +639,14 @@ export async function loadDevices() {
     if (!Array.isArray(j.list) || !j.list.length) throw new Error("清单为空");
     setDevices(j.list);   // 整份换绑要走 model 的 setter（理由见 src/model.mjs 头部）
     cfgMode = "文件";
+    // ⚠ HTTP 200 不等于"这是真名册"：serve.mjs 的 load() 在 devices.json 读不到 / 内容不合规格时
+    //   照样回 200，只是 list 换成内置那八台道具（source = seeded / invalid-fallback / unreadable-fallback）。
+    //   只 200 就当"服务给的名单"，观众那块墙上就会静默站一排道具 —— 而那正是这一格要挡的事。
+    //   主人那一头也顺带保住：道具上墙时他在弹窗里编辑，saveNow 会把这八台写回 devices.json，
+    //   红字先挂出来，他才有可能在按保存之前看见"这不是真机器"。
     // 成功要在换绑之后报：setDevices 是整份换绑，来源那一格跟的是"屏上现在站着的是哪一份"
-    setRosterSource(ACCESS.viewer ? "server-hosts" : "server-devices");
+    if (rosterIsProps(j.source)) setRosterSource("builtin", rosterPropsNote(j.source, CFG_FILE));
+    else setRosterSource(ACCESS.viewer ? "server-hosts" : "server-devices");
   } catch (e) {
     cfgMode = "内存";
     // ⚠ 这一支以前只把弹窗里那行字改成"内存"，而观众开不了弹窗 ⇒ 屏上站一排道具机器而没人知道。

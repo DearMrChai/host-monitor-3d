@@ -272,9 +272,10 @@ export const ACCESS = { viewer: false };
 
 // 名册来源（2026-09-25 清账2）：墙上那几台是从哪儿来的。
 // 内置那一份是**道具**（demo 用的假机器，负载是本地随机游走）：没连服务直接开页面时它就够使，
-// 但"服务端清单没读到、于是屏上站着四台看着真的一排假机器"是另一回事 —— 那块墙的定位是变化检测器，
+// 但"服务端清单没读到、于是屏上站着八台看着真的一排假机器"是另一回事 —— 那块墙的定位是变化检测器，
 // 把道具当真机器摆出去就是它最不能犯的一种错。所以这一格现在要分得开四种：
 // 'unknown' 还没问过（开机那一瞬，不该闪警报）· 'server-hosts'/'server-devices' 真名册 · 'builtin' 道具上墙。
+// 道具那一支有三条来路（`file://` / 服务端回内置名册 / 那一枪整个失败），差别只在 error 那句话。
 export const ROSTER = { source: 'unknown', error: '' };
 export const ROSTER_SOURCES = ['unknown', 'builtin', 'server-hosts', 'server-devices'];
 export function setRosterSource(source, error = '') {
@@ -286,6 +287,16 @@ export function rosterBadge(source = ROSTER.source, error = ROSTER.error) {
   if (source === 'unknown' || source === 'server-hosts' || source === 'server-devices') return { hidden: true, text: '' };
   return { hidden: false, text: error ? '内置道具名册：' + error + '（屏上这几台不是真机器）'
     : '内置道具名册：没连服务，屏上这几台不是真机器' };
+}
+// 服务端回的那一份清单是不是"真从 devices.json 读出来的"。
+// 为什么不能拿 HTTP 200 当判据：serve.mjs 的 load() 在读不到文件时**照样回 200**，
+// 只是 list 换成内置那八台道具、source 换成 seeded / invalid-fallback / unreadable-fallback。
+// 只认 'file'、其余一律算道具（认死形状而不是认名单：以后再加一种 fallback 也不会漏成"静默真名册"）。
+export const SERVER_ROSTER_FILE = 'file';
+export const SERVER_ROSTER_PROPS = ['seeded', 'invalid-fallback', 'unreadable-fallback'];
+export function rosterIsProps(source) { return source !== SERVER_ROSTER_FILE; }
+export function rosterPropsNote(source, file = 'devices.json') {
+  return '服务端没读到 ' + file + '，回的是内置名册（source=' + (source || '未知') + '）';
 }
 
 export function setDevices(list) {

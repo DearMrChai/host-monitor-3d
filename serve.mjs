@@ -122,7 +122,13 @@ const scrub = (list) => withLive(list).map((d) => {
 
 async function load() {
   if (!existsSync(FILE)) {
-    await save(FILE, DEFAULTS);
+    // 只回道具、**不顺手把 DEFAULTS 写成 devices.json**（09-25 清账2 查出的一半）：
+    // 原先这里先 save 再报 seeded，于是"道具"只在文件消失后的第一次请求里露一次脸 ——
+    // 第二次刷新起 source 就成了 'file'，页面那句道具红字安静下来，屏上却还站着八台道具。
+    // 对一块以"这些数是真抓的"为存在理由的墙，那种一次性提示等于没有提示。
+    // 现在只要文件还没回来，每一次请求都如实报 seeded；主人真在弹窗里编辑一次，PUT 才把它落成文件。
+    console.log("⚠ 没有 " + path.basename(FILE) + "：这一轮回的是内置道具名册（八台 demo 机器，负载是本地随机游走），"
+      + "页面上会挂红字；把真清单写回这个文件就恢复正常。");
     return { source: "seeded", list: DEFAULTS };
   }
   try {

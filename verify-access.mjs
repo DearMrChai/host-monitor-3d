@@ -164,8 +164,8 @@ ok('页面读的是服务端那一轮的缓存，不再是页面自己排定时�
 // 登记过的那条失败模式：观众那一台若 /api/hosts 读失败，页面会静默退回**内置道具名册** ——
 // 屏上是一片看着全真的一排假机器，而那块墙存在的理由就是"这些数是真抓的"。
 // 他 09-25 逐字："第二项要清账" ⇒ 原先"新缺陷只登记不追改"对这一条作废。
-// 判据两层：① rosterBadge 这一格纯函数（挂/不挂、挂什么，屏上与闸共用同一处）
-//           ② 三条读名册的路径（file:// / 读失败 / 读到）必须都报到这一格里，少一条就是又静默了
+// 判据两层：① rosterBadge / rosterIsProps 这两格纯函数（挂/不挂、挂什么、算不算道具，屏上与闸共用同一处）
+//           ② 四条读名册的路径（file:// / 读到文件 / 服务回道具 / 读失败）必须都报到这一格里，少一条就是又静默了
 const M = await import("./src/model.mjs");
 ok('名册初始是"还没问过"（开机那一瞬不闪红字，但也不许是"已读到"）',
   M.ROSTER.source, 'unknown');
@@ -179,16 +179,61 @@ ok('file:// 那一支也报（"本来就该是道具"不是静默的借口，文
   '内置道具名册：file:// 没连本地服务（屏上这几台不是真机器）');
 ok('unknown（还没问过）不挂红字', M.rosterBadge('unknown').hidden, true);
 // 三条路径接线：只验"源码里确实调了"不够，还要钉"没有一条路径绕过它"——
-// 所以这一格统计的是调用点数量：setRosterSource 在 loadDevices 里必须正好出现三次
-// （file:// 一支、成功一支、失败一支），多一处少一处都停下来要人看。
+// 所以这一格统计的是调用点数量：setRosterSource 在 loadDevices 里必须正好出现四次
+// （file:// 一支、读到文件一支、服务回道具一支、读失败一支），多一处少一处都停下来要人看。
 const rosterCalls = (PAGE.set.match(/setRosterSource\(/g) || []).length;
-ok('loadDevices 三条路径全部上报来源（file:// / 读到 / 读失败）', rosterCalls, 3);
+ok('loadDevices 四条路径全部上报来源（file:// / 读到文件 / 服务回道具 / 读失败）', rosterCalls, 4);
+// 表不是装饰：这一格双向对账 —— 路径上传进来的值必须都在 ROSTER_SOURCES 里（新增一支忘了登记会红），
+// 而表里那四种除了"初始的 unknown"之外必须真被某条路径用到（留一支没人发的值 = 屏上永远读不到的假状态）。
+{
+  const used = new Set([...PAGE.set.matchAll(/setRosterSource\(\s*"([a-z-]+)"/g)].map((m) => m[1]));
+  if (/setRosterSource\(ACCESS\.viewer \? "server-hosts" : "server-devices"\)/.test(PAGE.set)) {
+    used.add('server-hosts'); used.add('server-devices');
+  }
+  ok('四条路径传来的来源值都在 ROSTER_SOURCES 表里，表里也没有没人发的假状态',
+    [[...used].every((v) => M.ROSTER_SOURCES.includes(v)), [...used].sort().join(','), M.ROSTER.source],
+    [true, 'builtin,server-devices,server-hosts', 'unknown']);
+}
 ok('读失败那一支带上端点与原文（屏上那句要能指出是哪扇门没开）',
   /setRosterSource\("builtin", \(ACCESS\.viewer \? HOSTS_API : CFG_API\) \+ " 读失败：" \+ e\.message\)/.test(PAGE.set), true);
 ok('成功那一支在 setDevices 之后才报（换绑之前报会把来源与屏上内容错开）',
   PAGE.set.indexOf('setDevices(j.list)') < PAGE.set.indexOf('setRosterSource(ACCESS.viewer ? "server-hosts"'), true);
+// 第二半（同一格账）：HTTP 200 也可能是道具。serve.mjs 的 load() 在读不到 devices.json 时
+// 回 200 + DEFAULTS 八台道具，只有 source 这一格分得开。这一对断言钉的是**两头的契约**：
+// 页面对 source 的分类走 model 的纯函数（闸跑得动），而服务端确实只发那四种值。
+ok('道具判据只认 source==="file"，其余一律算道具（含服务端还没发的新 fallback）',
+  [M.rosterIsProps('file'), M.rosterIsProps('seeded'), M.rosterIsProps('invalid-fallback'),
+    M.rosterIsProps('unreadable-fallback'), M.rosterIsProps(undefined), M.rosterIsProps('')],
+  [false, true, true, true, true, true]);
+ok('道具那一句文案带得上 source 与文件名（屏上要能看出是哪一份文件没读到）',
+  M.rosterPropsNote('seeded', 'devices.json'),
+  '服务端没读到 devices.json，回的是内置名册（source=seeded）');
+// 契约的另一头：服务端 load() 真的只出这四种 source。少一种 ⇒ 页面那一格就认不得了。
+{
+  const loadSeg = src.slice(src.indexOf('async function load() {'), src.indexOf('// 分区表：服务端不预置内容'));
+  // 数的是 model 那张表里的源码值，不是闸里另抄一份名单：服务端哪天改发第五种 source，
+  // 这条就会红着提醒"页面那一格还认不认得它"（两处各写一份必然走散，这一族的账本仓库踩过多次）。
+  const srcTable = [M.SERVER_ROSTER_FILE, ...M.SERVER_ROSTER_PROPS];
+  const found = srcTable.filter((q) => loadSeg.includes('source: "' + q + '"'));
+  ok('  截到 serve.mjs 的 load() 并数到它发的那几种 source（' + loadSeg.split('\n').length + ' 行 / '
+    + srcTable.length + ' 种）', [found.length, found.join(','), loadSeg.includes('list: DEFAULTS')],
+    [srcTable.length, srcTable.join(','), true]);
+  // seeded 那一支不许再把道具写成文件：一旦落盘，下一次请求的 source 就成了 'file'，
+  // 页面那行红字只露一次就算"报过了"——对一块长期挂着的墙等于没报（09-25 清账2 查出的另一半）。
+  ok('  没有 devices.json 时只回道具、不落盘（道具身份每次请求都还报得出来）',
+    loadSeg.includes('await save(FILE, DEFAULTS)'), false);
+  ok('页面确实按 source 分类、不是只看 r.ok（只看 200 就是这一刀的原始病因）',
+    [PAGE.set.includes('if (rosterIsProps(j.source)) setRosterSource("builtin"'),
+      PAGE.set.includes('else setRosterSource(ACCESS.viewer ? "server-hosts" : "server-devices");')],
+    [true, true]);
+}
+
 ok('顶栏那一格在墙上（不是只在观众开不了的设置弹窗里）',
   [PAGE.wall.includes('<span id="roster" hidden></span>'), PAGE.wall.includes('rosterBadge')], [true, false]);
+// 内联那条 file:// 提醒（模块没跑起来时唯一还能说话的地方）09-25 也订正了：
+// 内置浏览器实测本地模块被放行、墙照样跑起来 —— 只说"打不开"就成了假话，屏上正荡着八台道具。
+ok('file:// 那句内联提醒也说清"就算跑起来了也是道具"',
+  PAGE.wall.includes('<strong>内置道具名册</strong>'), true);
 ok('DOM 那一处只写 text/hidden，判据全在 rosterBadge（不许两处各写一套文案）',
   (PAGE.set.match(/内置道具名册：\s*'\s*\+/g) || []).length, 0);
 ok('仪器问得到：__hm().roster() 走的是同一格 ROSTER',
