@@ -697,8 +697,16 @@ createServer(async (req, res) => {
   }
 
   if (req.method !== "GET") return send(res, 405, JSON.stringify({ error: "只支持 GET" }));
-  // 目录穿越防护：解出来必须还在本目录内
-  const rel = decodeURIComponent(url.pathname === "/" ? "monitor-wall.html" : url.pathname.slice(1));
+  // 目录穿越防护：解出来必须还在本目录内。
+  // decodeURIComponent 对畸形百分号（如 /%ZZ）会抛 URIError —— 2026-09-26 评审实证：它在这个 async handler
+  // 里没人接住，Node 22 默认 unhandledRejection=throw 直接让整个服务进程退出，一个远程请求就能把墙打黑。
+  // 包住它：解不开就当 400，进程绝不因单个请求退出。
+  let rel;
+  try {
+    rel = decodeURIComponent(url.pathname === "/" ? "monitor-wall.html" : url.pathname.slice(1));
+  } catch {
+    return send(res, 400, "bad request", "text/plain; charset=utf-8");
+  }
   const abs = path.resolve(DIR, rel);
   if (abs !== DIR && !abs.startsWith(DIR + path.sep)) return send(res, 403, "forbidden", "text/plain");
   // 静态出口白名单（见 STATIC_EXT 那条注释）：不在名单里的扩展名直接 404，
