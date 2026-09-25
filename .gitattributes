@@ -1,0 +1,5 @@
+# 强制文本文件行尾为 LF（2026-09-26 加）：
+# 这台机器 core.autocrlf=true，git checkout 会把工作树转成 CRLF ——
+# verify-load.mjs 用 indexOf('\n}\n') 截 serve.mjs 里的 framePeek，CRLF 下失配、自检误报全红。
+# 全仓文本一律 LF，从根上堵住这个坑。
+* text=auto eol=lf
