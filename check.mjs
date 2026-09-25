@@ -1,4 +1,6 @@
-// 一条命令的自检：语法（含 HTML 里那段模块体）→ 几何注入 → 几何对账 → CPU 并卡口径 → 综合负载口径 → 三档关联（波速/节拍拖不出反序）→ 访问分权（两扇门与脱敏）→ 二进制雨（图集与颗数）。
+// 一条命令的自检：语法（含 HTML 里那段模块体）→ 几何注入 → 几何对账 → 角铁（24 件臂长/重叠）→ CPU 并卡口径 → 综合负载口径 → 三档关联（波速/节拍拖不出反序）→ 自然路径涟漪取证 → 访问分权（两扇门与脱敏）→ 二进制雨（图集与颗数）。
+// ⚠ 凡是"截某段原文来量"的闸都必须在这条命令里：verify-brackets 就因为没进门，
+//   2026-09-24 那段角铁搬进 src/fleet.mjs 之后它一直截不到东西、抛 ReferenceError，坏了整整一天，`npm run check` 全绿没受影响。
 // 为什么不引 linter：这一仓库的纪律是零构建，`node --check` 就是唯一门槛（见 README「怎么跑」）。
 // HTML 那段必须单独提出来量：它占整页 3200 多行，而 node 不认 .html。
 import { readFileSync, writeFileSync, unlinkSync, readdirSync } from 'node:fs';
@@ -36,8 +38,8 @@ for (const f of modFiles) {
   check(f, readFileSync(f, 'utf8'), '_check_one.mjs');
 }
 
-for (const step of ['inject-geometry.mjs', 'verify-geometry.mjs', 'verify-cpu.mjs', 'verify-load.mjs',
-  'verify-grade.mjs', 'verify-ripples.mjs', 'verify-access.mjs', 'verify-rain.mjs']) {
+for (const step of ['inject-geometry.mjs', 'verify-geometry.mjs', 'verify-brackets.mjs', 'verify-cpu.mjs',
+  'verify-load.mjs', 'verify-grade.mjs', 'verify-ripples.mjs', 'verify-access.mjs', 'verify-rain.mjs']) {
   const r = spawnSync(process.execPath, [step], { encoding: 'utf8' });
   process.stdout.write(r.stdout || '');
   if (r.status !== 0) {

@@ -1,6 +1,9 @@
 // 角铁自检（跑法：node verify-brackets.mjs）。
-// 把 monitor-wall.html 里的 BRACKET + createCornerBrackets 抠出来，用假 THREE 跑一遍，逐件量"占哪一段"，
+// 把角铁那段（`const BRACKET` + `createCornerBrackets`）抠出来，用假 THREE 跑一遍，逐件量"占哪一段"，
 // 再两两查三件事：体积重叠、同侧重合（本项目判据里会叠色/闪烁的那种）、面对面贴合（良性）。
+// ⚠ 截的是 **src/fleet.mjs**，不是页面：这一段 2026-09-24 T5 刀5 从 HTML 搬进陈列层，而本闸没跟着换地方，
+//   于是 `indexOf` 返回 -1 → 截出碎片 → 抛 `ReferenceError: BRACKET is not defined`，坏了整整一天没人发现，
+//   因为它**不在 check.mjs 的八道里**（"自检全过"从来不包含它）。今天补两样：截不到就 exit 1、"截到几行"随断言打印。
 // 顺带把整个 <script type="module"> 落盘过一遍 node --check —— 页面里改出语法错要当场知道，别等开浏览器。
 import { readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -25,10 +28,20 @@ try {
   process.exit(1);
 }
 
-// ---------- 2. 抠出角铁那一段（从 BRACKET 常量到下一个区块注释） ----------
-const b0 = src.indexOf("const BRACKET =");
-const b1 = src.indexOf("// 区的颜色 =");
-const code = src.slice(b0, b1) + "\nreturn { BRACKET, createCornerBrackets };";
+// ---------- 2. 抠出角铁那一段（从 BRACKET 常量到下一个区块注释）----------
+// 截 src/fleet.mjs；"截到几行"当正对照印出来，marker 漂了就当场红（同一族坑见 check.mjs 头上那条）。
+const fleet = readFileSync(join(HERE, "src/fleet.mjs"), "utf8");
+const b0 = fleet.indexOf("const BRACKET =");
+const b1 = fleet.indexOf("// 区的颜色 =");
+if (b0 < 0 || b1 < 0 || b1 < b0) {
+  console.log("✗ 没从 src/fleet.mjs 截到角铁那一段（marker 漂了：b0=" + b0 + " b1=" + b1 + "）⇒ 本闸空转，不算验过");
+  process.exit(1);
+}
+const code = fleet.slice(b0, b1) + "\nreturn { BRACKET, createCornerBrackets };";
+const hasBoth = code.includes("const BRACKET =") && code.includes("function createCornerBrackets(");
+console.log((hasBoth ? "✓ " : "✗ ") + "截到 BRACKET + createCornerBrackets 原文（"
+  + code.split("\n").length + " 行）" + (hasBoth ? "" : " ⇒ 缺一半，空转不算验过"));
+if (!hasBoth) process.exit(1);
 
 class BoxGeo { constructor(w, h, d) { this.w = w; this.h = h; this.d = d; } }
 class Vec3 {
