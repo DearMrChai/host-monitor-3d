@@ -549,6 +549,12 @@ const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; ch
   ".mjs": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8",
   ".css": "text/css; charset=utf-8" };
 
+// 静态出口只放这几类（网页运行要的：页面 / 模块 / 样式 / 图标）。
+// ⚠ 必须白名单、不能放 .json/.log：devices.json 里是明文 SSH 口令，probe.log 是抓帧审计，
+//   一旦能从静态路径整份读出，前面 HM_ALLOW/HM_OWNER 两扇门和 /api/hosts 的脱敏就全白做了
+//   （2026-09-26 评审实证：GET /devices.json 直接返回明文 user/pass）。这三个 json 只走各自的 /api/* 出口。
+const STATIC_EXT = new Set([".html", ".mjs", ".js", ".css", ".svg", ".ico"]);
+
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
   // 第一道门：能不能连这块墙（看）。名单没给 = 放开，连页面带接口一起放行。
@@ -695,9 +701,13 @@ createServer(async (req, res) => {
   const rel = decodeURIComponent(url.pathname === "/" ? "monitor-wall.html" : url.pathname.slice(1));
   const abs = path.resolve(DIR, rel);
   if (abs !== DIR && !abs.startsWith(DIR + path.sep)) return send(res, 403, "forbidden", "text/plain");
+  // 静态出口白名单（见 STATIC_EXT 那条注释）：不在名单里的扩展名直接 404，
+  // 连 readFile 都不碰 —— 凭据文件连"存不存在"都不对外报。
+  const ext = path.extname(abs).toLowerCase();
+  if (!STATIC_EXT.has(ext)) return send(res, 404, "not found", "text/plain");
   try {
     const buf = await readFile(abs);
-    send(res, 200, buf, TYPES[path.extname(abs).toLowerCase()] || "application/octet-stream");
+    send(res, 200, buf, TYPES[ext] || "application/octet-stream");
   } catch {
     send(res, 404, "not found", "text/plain");
   }
