@@ -688,13 +688,34 @@ function stepRipples(t) {
 // 这里只留**每档第一次出现的那一圈**（≤3 条），于是它既小、又是长跑才拿得到的东西：
 // 看板挂一整天，某台真机哪一刻真跑进了 70 % 以上，那一圈用的值就被记下来了。
 // 它不替代撒环那处的读数：两处调用点用的是同一张 STATES，差别只在"谁把档位算出来"。
-const rippleSpawns = [];
+// ⚠ 这份要活过刷新（09-25 深夜补）：ALERT 等的就是一台真机真过 70 %，而那种时刻多半没人正开着这页；
+// 只揣在模块内存里的话，页面一刷新（我每轮部署都要刷）就把它丢了 —— 他报"142 刚到过 98"时，
+// 我手里那份读数就只剩 ACTIVE/IDLE，那一圈红档的数当场上不了账。所以每记一档写一次盘、开页再读回来：
+// 这台仪器从"当时看得见才算"变成"路过过一次就永远留档"。
+const EV_KEY = "hm3d.rippleEvidence.v1";
+export const RIPPLE_EVIDENCE_KEY = EV_KEY;   // 键名只写这一处（闸与仪器都从这里对账）
+const rippleSpawns = evidenceRestore();
 export function rippleEvidence() { return rippleSpawns.map((e) => ({ ...e })); }
 function noteRipple(d, st, t) {
   for (const e of rippleSpawns) if (e.key === st.key) return;
   rippleSpawns.push({ key: st.key, dev: d.short, speed: st.speed, amplitude: st.amplitude,
     intervalS: st.interval, at: t });
   if (rippleSpawns.length > 8) rippleSpawns.length = 8;   // 只防档位变多，正常一辈子 3 条
+  evidenceSave();
+}
+// 读回来时按 STATES 的键名收一遍：档位改过名、或那格是别人手写的脏东西，都不该把开页弄崩
+function evidenceRestore() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(EV_KEY) || "[]");
+    if (!Array.isArray(raw)) return [];
+    const keys = STATES.map((s) => s.key);
+    return raw.filter((e) => e && keys.includes(e.key)).slice(0, 8).map((e) => ({
+      key: e.key, dev: String(e.dev || ""), speed: Number(e.speed), amplitude: Number(e.amplitude),
+      intervalS: Number(e.intervalS), at: Number(e.at) }));
+  } catch (e) { return []; }
+}
+function evidenceSave() {
+  try { localStorage.setItem(EV_KEY, JSON.stringify(rippleSpawns)); } catch (e) { /* 写不进就算了，屏上那一圈照荡 */ }
 }
 // 雨壳的数值正对照：截图是黑的（WebGL 抓帧的老毛病），"壳围着地图"这件事只能靠半径/高度范围证明
 // #39 的两样也走这里取证：在画的颗数（更密）与累计换字次数（字形会变）——后者隔一秒读两次，
