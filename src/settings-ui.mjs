@@ -386,10 +386,20 @@ uiPaints.push(sliderRow(document.getElementById("rainRows"), {
   set: (v) => setPulseSetting("rainBrightness", v),
 }));
 uiPaints.push(sliderRow(document.getElementById("rainRows"), {
-  title: "雨的颗数", hint: "屏上画多少颗字。800 = 素材原样，1600 = 现在默认（更密那一刀），3200 封顶。",
+  title: "雨的颗数", hint: "屏上画多少颗字。800 = 素材原样，1600 = 现在默认，封顶 6400（2026-09-25 他从 3200 拉满说没糊，量程跟着抬一倍）。颗数只动字层，那 150 颗光斑不跟着加。",
   limits: PULSE_LIMITS.rainCount, fmt: (v) => v.toFixed(0) + " 颗",
   get: () => PULSE_SETTINGS.rainCount,
   set: (v) => setPulseSetting("rainCount", v),
+}));
+// ⚠ 这一格的键（rainDotMm）也要进下面的"写文件"载荷与"读文件"那一串，还要进 serve.mjs 的 SET_SHAPE.ground
+// —— 三处少一处就静默丢值（同 probeEveryMs 那个缺陷）。verify-rain.mjs 里对账。
+uiPaints.push(sliderRow(document.getElementById("rainRows"), {
+  title: "雨的字径", hint: "一颗字画多大（世界毫米）。720 = 素材原样，那一格字在墙上约 10 px 高，而 1 只有一根竖笔，"
+    + "缩到不到一个像素就认不出来了 ⇒ 想看清 0 和 1 的差别往右拖。2880 = 四倍，字约 40 px，代价是满屏开始互相压。"
+    + "跟\"颗数\"是两回事：那一格管多少粒，这一格管一粒多大。",
+  limits: PULSE_LIMITS.rainDotMm, fmt: (v) => v.toFixed(0) + " mm",
+  get: () => PULSE_SETTINGS.rainDotMm,
+  set: (v) => setPulseSetting("rainDotMm", v),
 }));
 // 涟漪 / 雨两颗独立开关：跟脉冲开关同一种按钮长相，但各管各的
 uiPaints.push(bindOnOff("rippleOn", "涟漪", () => PULSE_SETTINGS.rippleEnabled, setRippleEnabled));
@@ -426,6 +436,7 @@ function settingsToFile() {
       rainEnabled: PULSE_SETTINGS.rainEnabled,
       rainBrightness: PULSE_SETTINGS.rainBrightness,
       rainCount: PULSE_SETTINGS.rainCount,
+      rainDotMm: PULSE_SETTINGS.rainDotMm,
     }, gradeValues()),   // 六档波速/节拍：键名与夹好的值都由 model 那张 GRADE_KEYS 表给，这里不重抄
     monitor: { intervalMs: MONITOR_SETTINGS.intervalMs, probeEveryMs: MONITOR_SETTINGS.probeEveryMs },
   };
@@ -455,7 +466,7 @@ function applySettings(o) {
     if (typeof g.rippleEnabled === "boolean" && g.rippleEnabled !== PULSE_SETTINGS.rippleEnabled) { setRippleEnabled(g.rippleEnabled, true); changed = true; }
     if (typeof g.rainEnabled === "boolean" && g.rainEnabled !== PULSE_SETTINGS.rainEnabled) { setRainEnabled(g.rainEnabled, true); changed = true; }
     for (const k of ["rippleHeight", "rippleThickness", "rippleBrightness", "dotSeg", "dotSizeMm",
-      "rainBrightness", "rainCount"]) {
+      "rainBrightness", "rainCount", "rainDotMm"]) {
       const lim = PULSE_LIMITS[k], v = Number(g[k]);
       if (!Number.isFinite(v)) continue;
       const nv = clampv(v, lim[0], lim[1]);

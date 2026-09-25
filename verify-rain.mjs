@@ -75,7 +75,7 @@ ok('扩到三个字符仍成立（换出的必是别的字、且不越图集）'
 
 // ---------- ② 结构：图集 / 着色器补丁 / drawRange ----------
 has('图集是横排：一张画布宽 = 一格宽 × 格数', g, 'c.width = 128 * RAIN_GLYPHS.length; c.height = 128;');
-has('逐格画字（不再是整张贴图只画一个字）', g, 'for (let i = 0; i < RAIN_GLYPHS.length; i++) x.fillText(RAIN_GLYPHS[i], 64 + i * 128, 64);');
+has('逐格画字（不再是整张贴图只画一个字）', g, 'x.fillText(RAIN_GLYPHS[i], 64 + i * 128, 64);');
 missing('参考那一次性的掷硬币不再留在纹理里（"从头到尾同一个字"的病根）', g, 'x.fillText(Math.random() > 0.5');
 has('每颗带一个图集索引的属性', g, 'geo.setAttribute("aGlyph", new THREE.BufferAttribute(this.glyph, 1));');
 has('着色器加的是属性 + varying（不是新写一个材质）', g, 'sh.vertexShader = "attribute float aGlyph;\\nvarying float vGlyph;\\n"');
@@ -102,11 +102,12 @@ ok('默认颗数 = 参考的两倍（"更密"预设好，不用他手动拖）',
 // ---------- ④ 落盘：新键必须过服务端那张形状表 ----------
 const s = readFileSync('serve.mjs', 'utf8');
 has('serve.mjs 的 SET_SHAPE.ground 认得 rainCount（少这一格 = 每次 PUT 把它丢掉，同 probeEveryMs 那个缺陷）',
-  s, 'rainBrightness: "num", rainCount: "num",');
+  s, 'rainBrightness: "num", rainCount: "num", rainDotMm: "num",');
 const u = readFileSync(U, 'utf8');
 has('页面写文件时带上 rainCount', u, 'rainCount: PULSE_SETTINGS.rainCount,');
 has('读文件时认得 rainCount（会被钳进量程）', u, '"rainBrightness", "rainCount"');
-has('弹窗里有那一格滑杆', u, 'limits: PULSE_LIMITS.rainCount');
+// ⚠ 这三条 needle 一律带后面的逗号：不带就是**前缀匹配**，把键名手滑写成 rainDotMmX 也算"滑杆在那儿"（变异实验抓出来的）。
+has('弹窗里有那一格滑杆', u, 'limits: PULSE_LIMITS.rainCount,');
 
 // ---------- ⑤ 仪器：加强过的三件事都得有非眼睛读数 ----------
 has('颗数进读数（在画的，不是容量）', g, '雨滴: n, 雨滴容量: p.length / 3');
@@ -116,6 +117,34 @@ has('累计换字次数进读数（隔一秒读两次的差 = "字在换"的取�
 const wl = readFileSync('monitor-wall.html', 'utf8');
 has('调试钩子里有"上一帧交了多少个点"（关掉雨开关的差值 = 那颗 Points 真在渲染清单里）',
   wl, '点数: renderer.info.render.points');
+
+// ---------- ⑥ 2026-09-25 那一轮：他报"都是 0"之后补的读数与探针 ----------
+has('字色还是参考那一句纯白平涂（渐变那一刀量下来只买回 0.003 的光比差，已撤回；别再往这里找"都是 0"的解）',
+  g, 'x.fillStyle = "#ffffff";');
+missing('径向渐变没被偷偷加回来（加法混合下"更亮"改的是颜色，alpha 一个数都不动 ⇒ 只看 alpha 会以为改了）',
+  g, 'x.createRadialGradient(cx, 64, 6, cx, 64, 78)');
+has('两格的墨量差变成一个读数（"1 天生比 0 淡"这句话不许只靠嘴说）', g, '图集墨量: binaryRain.atlasBalance()');
+has('墨量算法按格切（格宽 128，跟图集那一句同一个口径）', g, 'const cell = (px / 128) | 0;');
+has('钉格探针在（CPU 侧"字形分布"证明不了着色器取了对应的格，这一对才是正对照）',
+  g, 'export function rainPinGlyph(v)');
+has('页面挂了钉格探针', wl, 'rainPinGlyph,');
+has('页面挂了程序侧取证（cacheKey / aGlyph / 片元里真有我那段）', wl, 'rainProgram: () => {');
+
+// ---------- ⑦ 字径那一格（2026-09-25 从写死抬成滑杆）：四处点名 + 默认值没跑偏 ----------
+// 为什么单挑这一颗：他报的"都是 0"最后量出来不是亮度的事（1 的有效光 = 0 的 76.5 %，改字色只买到 76.8 %），
+// 是"一颗字在墙上约 10 px 高、1 那根竖笔不到一个像素"的事 ⇒ 能救的维度只有"多大"。
+// 多大这颗旋钮的默认值必须正好是参考原来那颗 1.8 单位，不然"抬成滑杆"这件事本身就把画面改了。
+ok('字径量程', LIM.rainDotMm, [360, 2880, 20]);
+ok('默认字径 = 参考的 1.8 单位 × RAIN_S(400) mm', /rainDotMm:\s*(\d+)/.exec(MS)[1], String(1.8 * 400));
+has('建材质时读的是那一格', g, 'size: PULSE_SETTINGS.rainDotMm');
+missing('粒径那一句里不再留写死的 1.8 * RAIN_S（留着就是两处真值，滑杆只管一半）', g, 'size: 1.8 * RAIN_S');
+has('每帧把那一格落到材质上（拖完就变，不重建材质）', g, 'this.syncSize();');
+has('落到材质前钳进量程', g, 'const lim = PULSE_LIMITS.rainDotMm;');
+has('serve.mjs 的 SET_SHAPE.ground 认得 rainDotMm', s, 'rainDotMm: "num"');
+has('页面写文件时带上 rainDotMm', u, 'rainDotMm: PULSE_SETTINGS.rainDotMm,');
+has('读文件时认得 rainDotMm（会被钳进量程）', u, '"rainCount", "rainDotMm"');
+has('弹窗里有字径那一格滑杆', u, 'limits: PULSE_LIMITS.rainDotMm,');
+has('字径进读数（屏上那一颗到底是几毫米，不靠眼睛猜）', g, '字径mm: binaryRain.rainMat.size');
 
 console.log(fails ? '\n✗ 二进制雨 ' + fails + ' 条没过' : '\n✓ 二进制雨：换字截原文跑过、图集与 drawRange 接上、新键两头都在');
 process.exit(fails ? 1 : 0);

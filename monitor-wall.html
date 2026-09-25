@@ -390,7 +390,7 @@ import { devices, ZONES, ZONE_FIELD, zoneKeyOf, zoneOf, MONITOR_SETTINGS, MON_LI
 // 陈列层（一排机器 + 角铁 + 标注）在 src/fleet.mjs。这里只留"这一页"的接线：探针、提示浮层、装配。
 import { initFleet, rebuild, paintZoneColors } from "./src/fleet.mjs";
 // 地面层（脚下脉冲 / 点阵涟漪 / 二进制雨 / 每拍负载）。stepLoads 归它是因为"档位"这一维同时喂牌面与脚下。
-import { initGround, updateGround, updatePulses, stepLoads, pulseRun, pulseCount, groundStats, groundRun, rippleKick, loadReport } from "./src/ground.mjs";
+import { initGround, updateGround, updatePulses, stepLoads, pulseRun, pulseCount, groundStats, groundRun, rippleKick, rainPinGlyph, loadReport } from "./src/ground.mjs";
 // 设置层：齿轮那个弹窗 + 三份 JSON 的读写与防抖。sync / touch* 这几个名字页面还要用（探针回来要重排、
 // 陈列层要拿 touch 当"清单改过了"的信号），所以是真 import 不是注释。
 import { initSettings, sync, touchSettings, touch, loadDevices, settingsState, dialogState, bootFromFiles, isViewer } from "./src/settings-ui.mjs";
@@ -833,6 +833,33 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
   // （着色器是第一次画到才编译的）。这一格就是手动补那一帧，跟 tick 里画的是同一句。
   renderOnce: () => { renderer.render(scene, camera); return { 帧: renderer.info.render.frame,
     调用: renderer.info.render.calls, 点数: renderer.info.render.points, 程序数: renderer.info.programs.length }; },
+  // 着色器侧的取证（截图那条路是死的：canvas 不 preserveDrawingBuffer，抓出来全黑）。
+  // 三个字段各钉一条链，缺一环"字在换"就只是读码：
+  // ① cacheKey 里带着自定义键 —— 不带 = 补丁没生效，跟点阵共用一份程序（症状：地上的点开始串字）
+  // ② 编译后的属性表里真有 aGlyph —— 没有 = 那颗属性压根没进程序，屏上当然全是图集第一格
+  // ③ GL 里**真编译出来的**片元源码含按格取样那句 —— 用 getShaderSource 现读，不读我们手上的草稿
+  // ⚠ 第一版这里写的是 `p.attributes` 和正则测 `p.fragmentShader`：前者不是字段（要用 getAttributes()），
+  // 后者是 WebGLShader 对象不是字符串（测出来永远是 false）。两条都红，而屏上是好的 ——
+  // 那是仪器接错线，不是产品有病。所以每条都得配一个"它必须动"的正对照（②③ 从 false 翻 true 才算通道通）。
+  rainProgram: () => {
+    const xs = renderer.info.programs || [];
+    const gl = renderer.getContext();
+    const mine = xs.find((p) => (p.cacheKey || "").includes("hm-rain-atlas"));
+    if (!mine) return { 程序数: xs.length, 找到雨的program: false };
+    const attrs = mine.getAttributes ? mine.getAttributes() : {};
+    const frag = gl.getShaderSource(mine.fragmentShader) || "";
+    const vert = gl.getShaderSource(mine.vertexShader) || "";
+    // 两颗粒子材质必须落在两条不同的程序记录上（撞成一条 = customProgramCacheKey 没生效）
+    const pts = xs.map((p) => ({ 自定义键: (p.cacheKey || "").includes("hm-rain-atlas"),
+      有aGlyph: !!(p.getAttributes && "aGlyph" in p.getAttributes()) }));
+    return { 程序数: xs.length, 粒子程序: pts,
+      找到雨的program: true,
+      有aGlyph属性: "aGlyph" in attrs,
+      顶点里有aGlyph: /aGlyph/.test(vert),
+      片元里有按格取样: /pcoord/.test(frag),
+      片元里仍是一次性掷的旧写法: /Math\.random\(\) > 0\.5/.test(frag) };
+  },
+  rainPinGlyph,
   rippleKick,
   pulseLabels: () => holders.map((h) => h.stateLine.textContent + " [" + h.stateLine.className + "]"),
   // 分区读数：每台落在哪个区、区框在地面的范围、全景距离

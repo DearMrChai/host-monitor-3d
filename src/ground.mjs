@@ -341,7 +341,8 @@ const RAIN_GLYPHS = "01";
 // 容量一次配满，滑杆只改 drawRange：换档不重建 buffer、不新起 Float32Array。少画的那几百颗冻在原位，
 // 往回拉就接着下（雨本来就是无序重生，看不出来）。这一格必须等于 PULSE_LIMITS.rainCount 的上限，
 // 两边各写一个数迟早走散 —— verify-rain.mjs 里钉着这条对账。
-const RAIN_CAP = 3200;
+// 3200 → 6400（2026-09-25）：他把 3200 拉满说"还可以再升，没糊"，所以量程跟着抬；默认仍是 1600。
+const RAIN_CAP = 6400;
 // 每颗隔多久换一个字（秒）。参考没这件事，所以口径只能定在"看着像不像活物"：0.25 = 一秒最多抖 4 下，
 // 再快就是电视雪花，再慢跟不换字没区别。区间内随机，免得整场在同一帧一起翻脸。
 const RAIN_FLIP_MIN = 0.25, RAIN_FLIP_MAX = 0.9;
@@ -353,6 +354,9 @@ function rainGlyphTexture() {
   x.font = 'bold 100px "Courier New", monospace';
   x.textAlign = "center"; x.textBaseline = "middle";
   x.shadowColor = "#00aaff"; x.shadowBlur = 15;
+  // 一度把这里改成"每格径向渐变"来救他报的"都是 0"（想着窄字缩小后能留个亮点），量下来是白改：
+  // 平涂 vs 渐变的每颗有效光比值 0.765 → 0.768（图集那一格测的，见 atlasBalance），三个小数位的差别，
+  // 屏幕上认不出来是笔锋宽度的事，不是亮度的事。已回到跟参考一致的那一句平涂。
   x.fillStyle = "#ffffff";
   for (let i = 0; i < RAIN_GLYPHS.length; i++) x.fillText(RAIN_GLYPHS[i], 64 + i * 128, 64);
   const t = new THREE.CanvasTexture(c);
@@ -377,7 +381,9 @@ class BinaryRain {
     this.n = -1;   // -1 = 逼第一次 syncCount 一定落进"改 drawRange"那条路（同点阵 syncDots 的写法）
     this.flips = 0;                  // 累计换字次数：两次读数之差就是"屏上真的在换字"的取证
     // fog:false：雨在 40~54 m 外，吃我们那条线性雾（20~46 m）会被吞成灰，背景层就该一直在
-    this.rainMat = new THREE.PointsMaterial({ color: 0x0088ff, size: 1.8 * RAIN_S, map: rainGlyphTexture(),
+    // 粒径取 PULSE_SETTINGS.rainDotMm（默认 720 = 参考的 1.8 单位 × RAIN_S，换算只在默认值那一次做）；
+    // 每帧在 syncSize() 里再对一次，所以滑杆一拖就变，不用重建材质。
+    this.rainMat = new THREE.PointsMaterial({ color: 0x0088ff, size: PULSE_SETTINGS.rainDotMm, map: rainGlyphTexture(),
       transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
       sizeAttenuation: true, fog: false });
     // 每颗取图集中属于它的那一格。只改采样坐标这一句：粒径 / 亮度 / 加法混合 / pixelRatio 那套管子
@@ -421,6 +427,38 @@ class BinaryRain {
     this.bokeh = new THREE.Points(bgeo, this.bokehMat);
     sc.add(this.bokeh);
   }
+  // 图集每一格的"墨量"：把两格各自的量现算一遍。为什么要现算 ——
+  // "窄字在屏幕上天生就淡"这句话我一度只能靠嘴说，而他报的"都是 0"到底是不是错觉，判据就是这个数。
+  // ⚠ 只算 alpha 是错的（第一版就错在这）：加法混合叠的是**颜色 × 覆盖率**，
+  // 把字色从纯白换成径向渐变，alpha 一个数都不变（562565/430480 换色前后一模一样），
+  // 只有下面那个"有效光"看得见差别（0.765 → 0.768，差别小到那一次改动已撤回）。
+  // 两格共用同一套算法，谁也没被特殊照顾。
+  // 只在被问到时才算（一次 3 万像素），不进每帧。
+  atlasBalance() {
+    if (this._ink) return this._ink;   // 图集一辈子就烤一次，这个数不会变 ⇒ 算一次存着
+    const cv = this.rainMat.map.image;
+    const d = cv.getContext("2d").getImageData(0, 0, cv.width, cv.height).data;
+    const N = RAIN_GLYPHS.length;
+    const alpha = new Array(N).fill(0), lit = new Array(N).fill(0), lum = new Array(N).fill(0);
+    let peak = new Array(N).fill(0);
+    for (let py = 0; py < cv.height; py++) {
+      for (let px = 0; px < cv.width; px++) {
+        const cell = (px / 128) | 0;
+        const o = (py * cv.width + px) * 4;
+        const a = d[o + 3];
+        alpha[cell] += a;
+        if (a > 8) lit[cell]++;
+        // 有效光 = 覆盖率 × 那一支的相对亮度（sRGB 三通道均值就够判"谁更亮"，不做色彩管理）
+        const l = (d[o] + d[o + 1] + d[o + 2]) / (3 * 255);
+        lum[cell] += (a / 255) * l;
+        const pl = a * l;
+        if (pl > peak[cell]) peak[cell] = pl;
+      }
+    }
+    this._ink = { 每格alpha和: alpha, 每格亮像素: lit, 每格有效光: lum.map((v) => Math.round(v)),
+      最亮格光比: +(Math.min(...lum) / Math.max(...lum)).toFixed(3), 峰值: peak.map(Math.round) };
+    return this._ink;
+  }
   _respawn(arr, i, anywhere) {
     const a = Math.random() * Math.PI * 2;
     const r = RAIN_R0 + Math.random() * (RAIN_R1 - RAIN_R0);
@@ -440,10 +478,21 @@ class BinaryRain {
     this.rain.geometry.setDrawRange(0, n);
     return true;
   }
+  // "字画多大"这一格：他报"都是 0"之后量出来的结论是——不是亮度差（1 的有效光 = 0 的 76.5 %，
+  // 改字色只买到 0.768，见 atlasBalance），是"一颗字在墙上只有约 10 px 高，1 的那根竖笔不到一个像素"。
+  // 所以能救的那一维是他手里的"多大"，而它归他判：这里只管把滑杆那一格钳进量程后落到材质上。
+  syncSize() {
+    const lim = PULSE_LIMITS.rainDotMm;
+    const v = Math.max(lim[0], Math.min(lim[1], Number(PULSE_SETTINGS.rainDotMm) || lim[0]));
+    if (v === this.rainMat.size) return false;
+    this.rainMat.size = v;
+    return true;
+  }
   update(delta) {
     const gb = PULSE_SETTINGS.rainEnabled ? PULSE_SETTINGS.rainBrightness : 0;
     this.rainMat.opacity = gb;
     this.bokehMat.opacity = gb * 0.8;
+    this.syncSize();
     this.syncCount();   // 关着也同步：那一格数字改了，屏上重新开雨时画的颗数就得跟着
     if (!PULSE_SETTINGS.rainEnabled) return;   // 关着 = 不透明度 0 且粒子冻住，省掉每帧上千次写
     const pos = this.rain.geometry.attributes.position.array;
@@ -555,6 +604,7 @@ function rainBounds() {
     雨半径mm: [Math.round(r0), Math.round(r1)], 雨高度mm: [Math.round(y0), Math.round(y1)],
     雨Y和mm: Math.round(ySum),   // 两次读数不同 = 雨真在下（关掉开关后应当不动）
     字形格数: RAIN_GLYPHS.length, 字形分布: dist,   // 两边都该有数：只有一格 = 图集没被逐颗用上
+    图集墨量: binaryRain.atlasBalance(),   // 每格各自的 alpha 总量（"1 天生比 0 淡"这条现在是个数，不是嘴说）
     换字累计: binaryRain.flips, 换字间隔秒: [RAIN_FLIP_MIN, RAIN_FLIP_MAX],
     光斑: binaryRain.bAng.length };
 }
@@ -810,6 +860,18 @@ export function groundStats() {
     雨不透明: +binaryRain.rainMat.opacity.toFixed(3), 光斑不透明: +binaryRain.bokehMat.opacity.toFixed(3),
     点径mm: rippleTerrain.material.size, 放大: rippleTerrain.mesh.scale.x,
     地面边长mm: Math.round(300 * GROUND_S), 地面高度mm: rippleTerrain.mesh.position.y, ...rainBounds(), ...terrainBounds() };
+}
+// 正对照仪器（只给探针用）：把整场钉成图集里的某一格，传 null = 恢复逐颗掷。
+// 为什么要它：CPU 侧那格"字形分布"只证明**数组**在动，证明不了**着色器真按它取了那一格**。
+// 全钉 0 / 全钉 1 各量一次屏幕亮像素，两次必须不同 —— 不同才说明图集这条路是活的；
+// 相同就说明"字在换"整条停在读码层（他 09-25 报的"都是 0"就是靠这一对读数结的案）。
+// ⚠ 钉住只在手推帧/手动 renderOnce 那几拍里成立：页面自己跑起来后每颗照样会换字，会把钉子拔掉。
+export function rainPinGlyph(v) {
+  const g = binaryRain.glyph;
+  if (v === null) for (let i = 0; i < g.length; i++) g[i] = (Math.random() * RAIN_GLYPHS.length) | 0;
+  else g.fill(v);
+  binaryRain.rain.geometry.attributes.aGlyph.needsUpdate = true;
+  return { 钉成: v, 分布: rainBounds().字形分布 };
 }
 export function groundRun(steps) {
   // 时间基准跨次调用保持单调（同 pulseRun 那次订正）：否则 stepRipples 的下一拍会一直算在"未来"，
