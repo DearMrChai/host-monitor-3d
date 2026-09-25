@@ -37,7 +37,7 @@ for (const f of modFiles) {
 }
 
 for (const step of ['inject-geometry.mjs', 'verify-geometry.mjs', 'verify-cpu.mjs', 'verify-load.mjs',
-  'verify-grade.mjs', 'verify-access.mjs', 'verify-rain.mjs']) {
+  'verify-grade.mjs', 'verify-ripples.mjs', 'verify-access.mjs', 'verify-rain.mjs']) {
   const r = spawnSync(process.execPath, [step], { encoding: 'utf8' });
   process.stdout.write(r.stdout || '');
   if (r.status !== 0) {

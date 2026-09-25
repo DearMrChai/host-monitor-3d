@@ -160,5 +160,39 @@ ok('页面读的是服务端那一轮的缓存，不再是页面自己排定时�
   [PAGE.wall.includes('fetch("/api/frames"'), PAGE.wall.includes('fetch("/api/round"'),
     /function probeRound\(/.test(PAGE.wall)], [true, true, false]);
 
-console.log(fails ? '\n✗ 访问分权 ' + fails + ' 条没过' : '\n✓ 访问分权：两扇门的名单/回退/脱敏/写接口表都对');
+// ---------- 清账2（2026-09-25）：名册来源不许静默 ----------
+// 登记过的那条失败模式：观众那一台若 /api/hosts 读失败，页面会静默退回**内置道具名册** ——
+// 屏上是一片看着全真的一排假机器，而那块墙存在的理由就是"这些数是真抓的"。
+// 他 09-25 逐字："第二项要清账" ⇒ 原先"新缺陷只登记不追改"对这一条作废。
+// 判据两层：① rosterBadge 这一格纯函数（挂/不挂、挂什么，屏上与闸共用同一处）
+//           ② 三条读名册的路径（file:// / 读失败 / 读到）必须都报到这一格里，少一条就是又静默了
+const M = await import("./src/model.mjs");
+ok('名册初始是"还没问过"（开机那一瞬不闪红字，但也不许是"已读到"）',
+  M.ROSTER.source, 'unknown');
+ok('道具上墙 ⇒ 顶栏必须挂出来（这是这一刀的全部目的）',
+  M.rosterBadge('builtin', '/api/hosts 读失败：HTTP 500'),
+  { hidden: false, text: '内置道具名册：/api/hosts 读失败：HTTP 500（屏上这几台不是真机器）' });
+ok('观众与主人两种真名册 ⇒ 都不挂（不常驻一行红字，只有异常才出现）',
+  [M.rosterBadge('server-hosts').hidden, M.rosterBadge('server-devices').hidden], [true, true]);
+ok('file:// 那一支也报（"本来就该是道具"不是静默的借口，文案另给一句）',
+  M.rosterBadge('builtin', 'file:// 没连本地服务').text,
+  '内置道具名册：file:// 没连本地服务（屏上这几台不是真机器）');
+ok('unknown（还没问过）不挂红字', M.rosterBadge('unknown').hidden, true);
+// 三条路径接线：只验"源码里确实调了"不够，还要钉"没有一条路径绕过它"——
+// 所以这一格统计的是调用点数量：setRosterSource 在 loadDevices 里必须正好出现三次
+// （file:// 一支、成功一支、失败一支），多一处少一处都停下来要人看。
+const rosterCalls = (PAGE.set.match(/setRosterSource\(/g) || []).length;
+ok('loadDevices 三条路径全部上报来源（file:// / 读到 / 读失败）', rosterCalls, 3);
+ok('读失败那一支带上端点与原文（屏上那句要能指出是哪扇门没开）',
+  /setRosterSource\("builtin", \(ACCESS\.viewer \? HOSTS_API : CFG_API\) \+ " 读失败：" \+ e\.message\)/.test(PAGE.set), true);
+ok('成功那一支在 setDevices 之后才报（换绑之前报会把来源与屏上内容错开）',
+  PAGE.set.indexOf('setDevices(j.list)') < PAGE.set.indexOf('setRosterSource(ACCESS.viewer ? "server-hosts"'), true);
+ok('顶栏那一格在墙上（不是只在观众开不了的设置弹窗里）',
+  [PAGE.wall.includes('<span id="roster" hidden></span>'), PAGE.wall.includes('rosterBadge')], [true, false]);
+ok('DOM 那一处只写 text/hidden，判据全在 rosterBadge（不许两处各写一套文案）',
+  (PAGE.set.match(/内置道具名册：\s*'\s*\+/g) || []).length, 0);
+ok('仪器问得到：__hm().roster() 走的是同一格 ROSTER',
+  PAGE.wall.includes('roster: () => rosterState()'), true);
+
+console.log(fails ? '\n✗ 访问分权 ' + fails + ' 条没过' : '\n✓ 访问分权：两扇门的名单/回退/脱敏/写接口表都对，名册来源不静默');
 process.exit(fails ? 1 : 0);

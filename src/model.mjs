@@ -270,6 +270,24 @@ export const liveOf = (d) => d.live === true;
 // ⚠ 只能就地改 ACCESS.viewer，不许整份换绑（见下面那三条"活"状态的规矩）。
 export const ACCESS = { viewer: false };
 
+// 名册来源（2026-09-25 清账2）：墙上那几台是从哪儿来的。
+// 内置那一份是**道具**（demo 用的假机器，负载是本地随机游走）：没连服务直接开页面时它就够使，
+// 但"服务端清单没读到、于是屏上站着四台看着真的一排假机器"是另一回事 —— 那块墙的定位是变化检测器，
+// 把道具当真机器摆出去就是它最不能犯的一种错。所以这一格现在要分得开四种：
+// 'unknown' 还没问过（开机那一瞬，不该闪警报）· 'server-hosts'/'server-devices' 真名册 · 'builtin' 道具上墙。
+export const ROSTER = { source: 'unknown', error: '' };
+export const ROSTER_SOURCES = ['unknown', 'builtin', 'server-hosts', 'server-devices'];
+export function setRosterSource(source, error = '') {
+  ROSTER.source = source; ROSTER.error = String(error || '');
+}
+// 顶栏那一格到底挂不挂、挂什么：写成纯函数而不是埋在 DOM 里，好让闸门能直接跑它
+// （DOM 那一头只有一个 rosterEl.textContent = 这里给的 text —— 判据只这一处，屏上与闸共用）。
+export function rosterBadge(source = ROSTER.source, error = ROSTER.error) {
+  if (source === 'unknown' || source === 'server-hosts' || source === 'server-devices') return { hidden: true, text: '' };
+  return { hidden: false, text: error ? '内置道具名册：' + error + '（屏上这几台不是真机器）'
+    : '内置道具名册：没连服务，屏上这几台不是真机器' };
+}
+
 export function setDevices(list) {
   devices = (list || []).map((it) => Object.assign(
     mkDev(String(it.name || "(未命名)"), TIERS.some((t) => t.key === it.tier) ? it.tier : "matx"),

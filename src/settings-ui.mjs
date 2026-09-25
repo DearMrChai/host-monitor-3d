@@ -10,7 +10,8 @@ import { THREE } from "./three.mjs";
 import { TIERS, tierOf, mkDev, seq, devices, setDevices, ZONES, ZONE_FIELD, ZONE_AISLE, ZONE_PITCH,
   ZONE_KEY_RE, ZONE_MAX, zoneKeyOf, zoneOf, OS_LABEL, MONITOR_SETTINGS, MON_LIMITS, MS_KEY,
   PULSE_SETTINGS, PULSE_LIMITS, PS_KEY, liveOf, ACCESS, zoneOffOf,
-  STATES, GRADE_KEYS, gradeBounds, setGrade, gradeValues } from "./model.mjs";
+  STATES, GRADE_KEYS, gradeBounds, setGrade, gradeValues,
+  ROSTER, setRosterSource, rosterBadge } from "./model.mjs";
 import { fmt, clampv, pctFmt, mmFmt } from "./format.mjs";
 import { el, mini, fieldRow, textField, sliderRow, bindOnOff } from "./ui.mjs";
 import { perfDev, hidePerf, refreshPerfHead } from "./dashboard.mjs";
@@ -573,6 +574,17 @@ const CFG_API = "/api/devices";
 const HOSTS_API = "/api/hosts";   // 同一份清单的观众版：没有 user / pass，多一个服务端算好的 live
 const CFG_FILE = "devices.json";
 const cfgLine = document.getElementById("cfgline");
+const rosterEl = document.getElementById("roster");
+
+// 名册来源要挂在**墙上**（顶栏那一格），不能只写在设置弹窗里：观众开不了弹窗，
+// 而"屏上站的到底是看板抓的真机器、还是内置那几台道具"是他不在场时最容易踩空的一格。
+// 挂什么、什么时候挂，判据在 model 的 rosterBadge（纯函数，闸门跑的就是它），这里只负责写 DOM。
+function paintRoster() {
+  if (!rosterEl) return;
+  const b = rosterBadge();
+  rosterEl.hidden = b.hidden;
+  rosterEl.textContent = b.text;
+}
 let cfgMode = "内存";
 let cfgLast = "";
 let cfgTimer = 0;
@@ -613,7 +625,10 @@ export async function loadDevices() {
     // 不发这一枪：相对地址在 file:// 下会解析成 file:///E:/api/devices，
     // 浏览器必然记一条红色错误，功能上虽然后退回默认，但 console 就不再是干净的
     cfgMode = "内存";
+    // 这一支屏上站的也是道具，所以也要报：file:// 是"本来就该是道具"，不是故障，文案分开
+    setRosterSource("builtin", "file:// 没连本地服务");
     setCfgLine();
+    paintRoster();
     return;
   }
   try {
@@ -624,11 +639,19 @@ export async function loadDevices() {
     if (!Array.isArray(j.list) || !j.list.length) throw new Error("清单为空");
     setDevices(j.list);   // 整份换绑要走 model 的 setter（理由见 src/model.mjs 头部）
     cfgMode = "文件";
+    // 成功要在换绑之后报：setDevices 是整份换绑，来源那一格跟的是"屏上现在站着的是哪一份"
+    setRosterSource(ACCESS.viewer ? "server-hosts" : "server-devices");
   } catch (e) {
     cfgMode = "内存";
+    // ⚠ 这一支以前只把弹窗里那行字改成"内存"，而观众开不了弹窗 ⇒ 屏上站一排道具机器而没人知道。
+    // 现在把失败原文记进 ROSTER，墙上顶栏那一格（#roster）会一直挂着"内置道具名册：…"。
+    setRosterSource("builtin", (ACCESS.viewer ? HOSTS_API : CFG_API) + " 读失败：" + e.message);
   }
   setCfgLine();
+  paintRoster();
 }
+// 仪器那一头要能一问就答"名册是哪来的"：这一格给 __hm().roster() 用（屏上那行字是给眼睛的）
+export function rosterState() { return { ...ROSTER }; }
 
 // ---------- 分区 ↔ 本地 zones.json ----------
 // 为什么单独一个文件：改分区名不该顺手把八台机器的连接信息重写一遍。

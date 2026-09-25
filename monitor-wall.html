@@ -12,6 +12,11 @@
   #bar .brand { font-size: 14px; font-weight: 600; letter-spacing: .05em; color: #e6edf3; }
   #bar .tag { font-size: 11px; opacity: .5; }
   #bar .fill { flex: 1; }
+  /* 名册来源（2026-09-25 清账2）：只有"内置道具上墙"时才出现这一格 —— 屏上那几台不是看板抓的真机器。
+     它必须在**墙上**而不是只在设置弹窗里：观众开不了弹窗，静默回落就是对他一个人说谎。 */
+  #bar #roster { font-size: 11px; color: #f85149; border: 1px solid rgba(248,81,73,.45);
+    border-radius: 4px; padding: 1px 6px; }
+  #bar #roster[hidden] { display: none; }   /* 同 #gear 那条：作者写的样式会盖掉 UA 的 [hidden] */
   #gear { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 7px; }
   /* 观众那一份要把它整个藏掉，而上面这行 display:grid 会盖掉 UA 的 [hidden]{display:none}
      —— 弹窗那边踩过同一坑（见 #mask[hidden]），所以这一格也必须补，不然 hidden=true 什么都不挡 */
@@ -240,6 +245,7 @@
 <div id="bar">
   <span class="brand">Host Monitor</span>
   <span class="tag">监控墙原型 · 未接入插件</span>
+  <span id="roster" hidden></span>
   <span class="fill"></span>
   <button id="gear" title="设备状态" aria-label="设备状态" aria-expanded="false">
     <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
@@ -391,10 +397,10 @@ import { devices, ZONES, ZONE_FIELD, zoneKeyOf, zoneOf, MONITOR_SETTINGS, MON_LI
 // 陈列层（一排机器 + 角铁 + 标注）在 src/fleet.mjs。这里只留"这一页"的接线：探针、提示浮层、装配。
 import { initFleet, rebuild, paintZoneColors } from "./src/fleet.mjs";
 // 地面层（脚下脉冲 / 点阵涟漪 / 二进制雨 / 每拍负载）。stepLoads 归它是因为"档位"这一维同时喂牌面与脚下。
-import { initGround, updateGround, updatePulses, stepLoads, pulseRun, pulseCount, groundStats, groundRun, rippleKick, rainPinGlyph, loadReport } from "./src/ground.mjs";
+import { initGround, updateGround, updatePulses, stepLoads, pulseRun, pulseCount, groundStats, groundRun, rippleKick, rainPinGlyph, loadReport, rippleEvidence } from "./src/ground.mjs";
 // 设置层：齿轮那个弹窗 + 三份 JSON 的读写与防抖。sync / touch* 这几个名字页面还要用（探针回来要重排、
 // 陈列层要拿 touch 当"清单改过了"的信号），所以是真 import 不是注释。
-import { initSettings, sync, touchSettings, touch, loadDevices, settingsState, dialogState, bootFromFiles, isViewer } from "./src/settings-ui.mjs";
+import { initSettings, sync, touchSettings, touch, loadDevices, settingsState, dialogState, bootFromFiles, isViewer, rosterState } from "./src/settings-ui.mjs";
 
 
 const canvas = document.getElementById("c");
@@ -867,6 +873,12 @@ window.__hm = () => ({ target: target.toArray(), want: want.target.toArray(), wa
   },
   rainPinGlyph,
   rippleKick,
+  // 清账1（2026-09-25）：自然路径的取证 —— 每一档**第一次真起圈**时用到的值，由 ground.mjs 的
+  // noteRipple 记在撒环那一行的下一行，所以这三档的读数是"这一圈真按这条链撒出去了"，不是读码。
+  // 没跑过的档位不在里面（不会编一个 8/16/30 出来）；看板挂久了黄/红那一档自己会出现。
+  rippleEvidence,
+  // 清账2：名册是哪来的（道具上墙时墙上顶栏也挂着这一行，这里是给仪器问的）
+  roster: () => rosterState(),
   pulseLabels: () => holders.map((h) => h.stateLine.textContent + " [" + h.stateLine.className + "]"),
   // 分区读数：每台落在哪个区、区框在地面的范围、全景距离
   zones: () => devices.map((d) => d.short + "→" + zoneOf(d).cn + (d.zone ? "(手动)" : "(自动)")),

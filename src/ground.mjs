@@ -679,9 +679,22 @@ function stepRipples(t) {
     // 落后多少都只补一圈（不追帧）：切到后台再回来那一瞬，不该在原地撒出十几圈
     if (t >= rt.next) {
       rippleTerrain.addRipple(h.x, h.z, st.color, st.amplitude, st.speed);
+      noteRipple(d, st, t);   // 自然路径的取证：这一圈确实是上面那一行撒的，档位与值是现读的
       rt.next = t + st.interval;
     }
   }
+}
+// 涟漪"取证"（2026-09-25 清账1）：三档波速此前只在手动撒环那处读到过，自然路径上黄/红两档没有读数。
+// 这里只留**每档第一次出现的那一圈**（≤3 条），于是它既小、又是长跑才拿得到的东西：
+// 看板挂一整天，某台真机哪一刻真跑进了 70 % 以上，那一圈用的值就被记下来了。
+// 它不替代撒环那处的读数：两处调用点用的是同一张 STATES，差别只在"谁把档位算出来"。
+const rippleSpawns = [];
+export function rippleEvidence() { return rippleSpawns.map((e) => ({ ...e })); }
+function noteRipple(d, st, t) {
+  for (const e of rippleSpawns) if (e.key === st.key) return;
+  rippleSpawns.push({ key: st.key, dev: d.short, speed: st.speed, amplitude: st.amplitude,
+    intervalS: st.interval, at: t });
+  if (rippleSpawns.length > 8) rippleSpawns.length = 8;   // 只防档位变多，正常一辈子 3 条
 }
 // 雨壳的数值正对照：截图是黑的（WebGL 抓帧的老毛病），"壳围着地图"这件事只能靠半径/高度范围证明
 // #39 的两样也走这里取证：在画的颗数（更密）与累计换字次数（字形会变）——后者隔一秒读两次，
