@@ -486,7 +486,17 @@ function probeDevice(d) {
 // 那是一份内存里的 Map，比一次 SSH 便宜三个数量级，也让"改了间隔"这件事不需要页面参与。
 const PULL_MS = 1000;   // 帧一到 1s 内上墙（2026-09-26 提速）
 let pullTimer = 0, lastRounds = null, lastPullErr = "";
+// 后台标签不喂心跳（2026-09-26 深夜修复）：Chrome 把后台标签的 1s 定时器节流到 ~1 次/分钟，
+// 那个"每 60s 拉一次 /api/frames"恰好卡住服务端的闲置判定（diff 永远到不了 120s）→ 永不停采。
+// 语义应该是"有没有人看着墙"，不是"有没有标签挂着"：页面不可见 = 没人看 = 心跳停，
+// 服务端 120s 后自然停采、真机零打扰；切回可见立即补拉一趟，帧秒级回来。
+let wallVisible = !document.hidden;
+document.addEventListener("visibilitychange", () => {
+  wallVisible = !document.hidden;
+  if (wallVisible) pullFrames();
+});
 async function pullFrames() {
+  if (!wallVisible) return;   // 页面在后台：不喂心跳（见 wallVisible 注释）
   try {
     const r = await fetch("/api/frames", { cache: "no-store" });
     const j = await r.json().catch(() => ({}));
@@ -551,7 +561,7 @@ async function bootProbe() {
 const FOCUS_MS = 5000;
 setInterval(async () => {
   const d = perfDev;
-  if (!d || isViewer() || !liveOf(d) || !d.host || !d.user || !d.power) return;
+  if (!wallVisible || !d || isViewer() || !liveOf(d) || !d.host || !d.user || !d.power) return;
   await probeDevice(d);
   if (perfDev === d) { paintZoneColors(); refreshPerfHead(); }
 }, FOCUS_MS);
