@@ -492,6 +492,22 @@ function noteFrame(host, r) {
   frames.set(host, { ok: !!r.ok, frame: r.frame || null, error: r.ok ? "" : String(r.error || "").slice(0, 200),
     at: new Date().toISOString() });
 }
+// OK 那一行顺手把**这一帧本来就采到的原始数**带上（2026-09-25 深夜）。
+// 为什么：他报"142 最近应该又一次超过 70 负载 98（我看到了画面）"，而页面那头的涟漪取证要
+// "有人开着这页、帧在跑"才攒得到（后台标签页连 rAF 都不跑）—— 服务端这一轮明明已经拿到这帧数，
+// 日志里却只留下一个 "OK"，于是"发生过"和"没证据"长得一模一样。
+// ⚠ 这里**只搬运不判断**：百分比怎么并成档位长在 src/model.mjs 的口径 B（CPU∥GPU 取 max、内存只抬档），
+// 服务端再抄一份判据就是两个真源、早晚走散 ⇒ 所以日志里是三个原始数，不是一个档位名。
+function framePeek(frame) {
+  if (!frame) return "";
+  // 两张卡那台（142）逐张在 gpus 里、老字段 gpu 只是第一张 ⇒ 两边都收一遍再取 max，
+  // 不拿"第一张空着"当成"这台机器空着"。取不到卡才是 "-"（0 是"这一秒真没活"，两码事）。
+  const cards = [].concat(frame.gpus || []).concat(frame.gpu || []).filter(Boolean);
+  const gpu = cards.length ? Math.max(...cards.map((x) => Number(x.util) || 0)) : "-";
+  const mem = frame.memTotalMb ? ((Number(frame.memUsedMb) || 0) / Number(frame.memTotalMb) * 100).toFixed(1) + "%" : "-";
+  return "  cpu=" + (frame.cpuPct === null || frame.cpuPct === undefined ? "-" : frame.cpuPct)
+    + " gpu=" + gpu + " mem=" + mem;
+}
 // 每一轮跑完才回文件里读这一格：他在设置里改"抓帧间隔"，下一轮就跟上（不必重启服务）。
 async function readEveryMs() {
   const { settings } = await loadSettings();
@@ -518,7 +534,7 @@ async function runRound() {
       try { r = await probe({ host: d.host, user: d.user, pass: d.pass, os: d.os }); }
       catch (e) { r = { ok: false, error: "服务内部错误：" + String((e && e.message) || e) }; }
       noteFrame(d.host, r);
-      logProbe(d.host, r.ok, r.ok ? "" : r.error);
+      logProbe(d.host, r.ok, r.ok ? framePeek(r.frame) : r.error);
       await new Promise((res) => setTimeout(res, ROUND_GAP_MS));
     }
   } finally {
@@ -592,7 +608,7 @@ createServer(async (req, res) => {
       try { r = await probe({ host: String(body.host || ""), user: String(body.user || ""),
         pass: String(body.pass || ""), os: String(body.os || "") }); }
       catch (e) { r = { ok: false, error: "服务内部错误：" + String((e && e.message) || e) }; }
-      logProbe(String(body.host || "?"), r.ok, r.ok ? "" : r.error);
+      logProbe(String(body.host || "?"), r.ok, r.ok ? framePeek(r.frame) : r.error);
       // 手动抓的那一帧也进缓存：否则"连通性测试"抓出来的数只活在弹窗里，两秒后页面从 /api/frames
       // 拉回来的还是旧帧，屏幕上看着像"测过了但墙上没动"。
       if (body.host) noteFrame(String(body.host), r);

@@ -99,6 +99,57 @@ for (const c of cases) {
     + '（要 pct=' + c.want.pct + ' 档=' + (c.want.key || '—') + '；旧口径只看 CPU 会给 ' + c.old + '）'
   );
 }
-console.log('\n' + (bad ? '✗ 综合负载 ' + bad + '/' + cases.length + ' 条不符（上面是差在哪）'
-  : '✓ 综合负载 ' + cases.length + '/' + cases.length + ' 条全按口径 B'));
+// ── ⑦ 服务端日志那一行的原始数（2026-09-25 深夜）───────────────────────────────
+// 为什么要在这里测：他报"142 最近应该又一次超过 70 负载 98（我看到了画面）"，可我手里那份取证只剩 ACTIVE/IDLE
+// —— 页面那头的记录要"有人开着页 + 帧在跑"才攒得到。服务端每轮都拿到了这一帧，却在日志里只留一个 "OK"，
+// 于是"发生过"跟"没证据"长得一模一样。现在 OK 那行带上三个原始数。
+// ⚠ 这一闸同时守着一句反面要求：**服务端不许长出第二份判据**（口径 B 只有一个家，在 src/model.mjs）。
+{
+  const srv = readFileSync('serve.mjs', 'utf8');
+  const i = srv.indexOf('function framePeek(frame) {');
+  const j = i < 0 ? -1 : srv.indexOf('\n}\n', i);
+  if (i < 0 || j < 0) { console.log('✗ 截不到 framePeek（serve.mjs 里那段改了名或改了形状）'); process.exit(1); }
+  const peekSrc = srv.slice(i, j + 2);
+  console.log('\n── ⑦ 服务端 OK 那行的原始数（framePeek 截原文，' + peekSrc.split('\n').length + ' 行）');
+  if (peekSrc.split('\n').length < 5) { console.log('✗ 只截到几行 = 起点/终点错了，本闸空转'); process.exit(1); }
+  const ctx = vm.createContext({ Math });
+  vm.runInContext(peekSrc + '\nthis.__peek = framePeek;', ctx, { filename: 'serve-framePeek-seg.mjs' });
+  const peek = ctx.__peek;
+  const peekCases = [
+    // 形状照 serve.mjs 归一化那一段抄：逐张在 `gpus`（142 两张 2080 Ti 走这里），老字段 `gpu` 只是 nvidia-smi 第一行。
+    // ⚠ 值有真有合成：cpu/mem 两格是 09-25 真帧上的数，那张 98 % 是他口述的那一次（我没能在那一刻抓到帧）⇒
+    //   这一例测的是"取 max"这个形状，不是"142 到过 98"的证据（那条账归服务日志，从今天起才留得下）。
+    { n: '142 双卡形状（逐张两张 29.5 / 合成 98）⇒ gpu=98（取 max，不是取第一张、不是取平均）',
+      f: { cpuPct: 6, memUsedMb: 5786, memTotalMb: 15912, gpu: { util: 29.5 }, gpus: [{ util: 29.5 }, { util: 98 }] },
+      want: '  cpu=6 gpu=98 mem=36.4%' },
+    { n: '单卡（笔记本真帧：cpu 42 / 显存 374 of 4096 / 卡 25）',
+      f: { cpuPct: 42, memUsedMb: 13468, memTotalMb: 16125, gpu: { util: 25 } },
+      want: '  cpu=42 gpu=25 mem=83.5%' },
+    { n: '取不到卡 ⇒ gpu=-（不是 0，0 是"这一秒真没活"）', f: { cpuPct: 1, memUsedMb: 100, memTotalMb: 1000, gpu: null },
+      want: '  cpu=1 gpu=- mem=10.0%' },
+    { n: '内存总数字段缺 ⇒ mem=-（不拿 0 % 假装）', f: { cpuPct: 3, gpu: { util: 0 } }, want: '  cpu=3 gpu=0 mem=-' },
+    { n: '第一张卡空着、第二张在忙 ⇒ 仍报 98（"这台空着"要看逐张那一栏）',
+      f: { cpuPct: 2, memUsedMb: 0, memTotalMb: 1000, gpu: { util: 0 }, gpus: [{ util: 0 }, { util: 98 }] },
+      want: '  cpu=2 gpu=98 mem=0.0%' },
+    { n: '这一轮压根没帧 ⇒ 空串（老那句 "OK" 一字不变）', f: null, want: '' },
+  ];
+  for (const c of peekCases) {
+    const got = peek(c.f);
+    const ok = got === c.want;
+    if (!ok) bad++;
+    console.log((ok ? '  ✓ ' : '  ✗ ') + c.n + ' ⇒ "' + got + '"' + (ok ? '' : '（要 "' + c.want + '"）'));
+  }
+  // 两处 logProbe（自动轮 + 页面上"催一轮"那只按钮）都要带，少一处就是那一头的账还是空的
+  const wired = (srv.match(/r\.ok \? framePeek\(r\.frame\)/g) || []).length;
+  const okWired = wired === 2;
+  if (!okWired) bad++;
+  console.log((okWired ? '  ✓ ' : '  ✗ ') + '两处 logProbe 都接上了 peek（' + wired + '/2）：自动轮与手动催抓不留两种口径');
+  const noJudge = !/gradeOf|levelOf|from "\.\/src\/model\.mjs"/.test(srv);
+  if (!noJudge) bad++;
+  console.log((noJudge ? '  ✓ ' : '  ✗ ') + '服务端没长出第二份判据（不 import model.mjs、没有 gradeOf/levelOf）'
+    + ' ⇒ 档位只有一个家：src/model.mjs 的口径 B');
+}
+
+console.log('\n' + (bad ? '✗ 综合负载 / 原始数 ' + bad + ' 条不符（上面是差在哪）'
+  : '✓ 综合负载 ' + cases.length + '/' + cases.length + ' 条全按口径 B，另有 framePeek 6 条 + 接线 2 条'));
 if (bad) process.exitCode = 1;
