@@ -429,6 +429,19 @@ function buildFrame(out) {
   };
 }
 
+// /api/probe 每来源限速：这一格等于"借这台服务往任意主机打 SSH"，不限速的话 OWNER 名单里
+// 一台机器被攻破 / 误配就成了跳板与扫描器（2026-09-26 评审）。正常用法打不满这一格：页面只在
+// "这台还没帧"时才补抓、连通性测试是人工点一下，轮询抓帧走服务端 runRound 根本不经过这里。
+const PROBE_LIMIT = { windowMs: 10000, max: 3 };
+const probeBuckets = new Map();   // ip -> { n, resetAt }
+function probeRateOk(ip) {
+  const now = Date.now();
+  let b = probeBuckets.get(ip);
+  if (!b || now >= b.resetAt) { b = { n: 0, resetAt: now + PROBE_LIMIT.windowMs }; probeBuckets.set(ip, b); }
+  b.n++;
+  return b.n <= PROBE_LIMIT.max;
+}
+
 // 口令可以为空：办公那几台 Windows 是"账号 user、不设密码"，空口令是它们的正常配置，
 // 不是"没填全"。所以这道门只看地址和用户名（linux 那几台口令不对的话，下面会如实报失败）。
 function probe({ host, user, pass, os }) {
@@ -603,6 +616,8 @@ createServer(async (req, res) => {
   }
   if (url.pathname === "/api/probe") {
     if (req.method !== "POST") return send(res, 405, JSON.stringify({ ok: false, error: "只支持 POST" }));
+    // 限速闸（见 probeBuckets 那条注释）：每来源 10 秒限 3 次，超限 429 且不消耗请求体
+    if (!probeRateOk(peerOf(req))) return send(res, 429, JSON.stringify({ ok: false, error: "probe 请求过频（每来源 10 秒限 3 次），稍后再试" }));
     let raw = "";
     req.on("data", (c) => { raw += c; if (raw.length > 4096) req.destroy(); });
     req.on("end", async () => {
