@@ -396,7 +396,8 @@ uiPaints.push(sliderRow(document.getElementById("rainRows"), {
 uiPaints.push(sliderRow(document.getElementById("rainRows"), {
   title: "雨的字径", hint: "一颗字画多大（世界毫米）。720 = 素材原样，那一格字在墙上约 10 px 高，而 1 只有一根竖笔，"
     + "缩到不到一个像素就认不出来了 ⇒ 想看清 0 和 1 的差别往右拖。2880 = 四倍，字约 40 px，代价是满屏开始互相压。"
-    + "跟\"颗数\"是两回事：那一格管多少粒，这一格管一粒多大。",
+    + "跟\"颗数\"是两回事：那一格管多少粒，这一格管一粒多大。2026-09-25 成柱之后这一格还多管一件事："
+    + "柱子里行与行的间距 = 字径 × 1.15，字越大一柱越稀、拉满就是一串隔三米远的大字。",
   limits: PULSE_LIMITS.rainDotMm, fmt: (v) => v.toFixed(0) + " mm",
   get: () => PULSE_SETTINGS.rainDotMm,
   set: (v) => setPulseSetting("rainDotMm", v),
